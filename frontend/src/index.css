@@ -1,0 +1,36 @@
+:root {
+  --bg: #ffffff;
+  --bg2: #f5f5f5;
+  --bg3: #ebebeb;
+  --border: #dddddd;
+  --border2: #cccccc;
+  --text: #0a0a0a;
+  --text2: #444444;
+  --text3: #777777;
+  --accent: #00d4aa;
+  --accent2: #0099ff;
+  --red: #e53935;
+  --green: #00c853;
+  --yellow: #f5a623;
+  --sui: #4DA2FF;
+  --arb: #28A0F0;
+  --font-display: 'Syne', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font-display); overflow: hidden; }
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+button { cursor: pointer; font-family: var(--font-display); }
+input, textarea { font-family: var(--font-mono); }
+
+@keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+@keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+@keyframes bridgePulse {
+  0% { box-shadow: 0 0 0 0 rgba(77,162,255,0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(77,162,255,0); }
+  100% { box-shadow: 0 0 0 0 rgba(77,162,255,0); }
+}

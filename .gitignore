@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment files
+.env
+backend/.env
+*.env
+
+# Database
+*.db
+*.db-journal
+
+# Build
+frontend/build/
+
+# Logs
+*.log
+.pm2/
+
+# Foundry
+contracts-arb/out/
+contracts-arb/cache/
+contracts-arb/broadcast/
+contracts-sui/build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys / secrets
+*.pem
+*.key
+cache/
