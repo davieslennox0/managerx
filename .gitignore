@@ -32,3 +32,12 @@ Thumbs.db
 *.pem
 *.key
 cache/
+
+# env files
+.env
+.env.save
+.env.local
+.env.production
+**/.env
+**/.env.save
+**/.env.local
