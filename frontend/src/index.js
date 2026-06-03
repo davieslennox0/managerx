@@ -6,6 +6,8 @@ import { SuiClientProvider, WalletProvider } from '@mysten/dapp-kit';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getFullnodeUrl } from '@mysten/sui/client';
 import App from './App';
+import { registerSlushWallet } from '@mysten/slush-wallet';
+registerSlushWallet({ name: 'ManagerX' });
 import './index.css';
 
 const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
