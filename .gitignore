@@ -45,3 +45,17 @@ frontend/build/
 frontend/static/
 contracts-arb/sui*
 contracts-arb/move-analyzer
+# Build outputs
+frontend/build/
+frontend/static/
+frontend/asset-manifest.json
+frontend/index.html
+
+# Sui binaries
+contracts-arb/sui*
+contracts-arb/move-analyzer
+
+# Foundry outputs
+contracts-arb/out/
+contracts-arb/cache/
+contracts-arb/broadcast/
