@@ -32,4 +32,17 @@ router.get('/:chain', async (req, res) => {
   }
 });
 
-module.exports = router;
+
+
+async function getPrice(symbol) {
+  try {
+    const r = await require('axios').get(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`,
+      { timeout: 3000 }
+    );
+    const price = r.data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    return price ? { price: price.toFixed(2) } : null;
+  } catch { return null; }
+}
+
+module.exports = { router, getPrice };
