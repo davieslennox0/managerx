@@ -7,59 +7,36 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
-    password_hash TEXT,
     name TEXT,
-    -- Wallet addresses
-    sui_address TEXT,
     evm_address TEXT,
+    sol_address TEXT,
+    sui_address TEXT,
     privy_user_id TEXT,
-    -- Balances per chain
-    sui_usdc_balance REAL DEFAULT 0,
-    arb_usdc_balance REAL DEFAULT 10000.00,
-    -- Auth
-    auth_type TEXT DEFAULT 'email',
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
-  CREATE TABLE IF NOT EXISTS holdings (
+  CREATE TABLE IF NOT EXISTS positions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    chain TEXT NOT NULL DEFAULT 'arbitrum',
+    chain TEXT NOT NULL,
     symbol TEXT NOT NULL,
-    shares REAL NOT NULL DEFAULT 0,
-    avg_price REAL NOT NULL DEFAULT 0,
-    FOREIGN KEY (user_id) REFERENCES users(id),
+    shares REAL NOT NULL,
+    avg_price REAL NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, chain, symbol)
   );
 
   CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    chain TEXT NOT NULL DEFAULT 'arbitrum',
+    chain TEXT NOT NULL,
     type TEXT NOT NULL,
     symbol TEXT NOT NULL,
-    shares REAL NOT NULL,
-    price REAL NOT NULL,
-    total REAL NOT NULL,
+    shares REAL,
+    price REAL,
+    total REAL,
     tx_hash TEXT,
-    timestamp TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS bridge_requests (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    amount_usdc REAL NOT NULL,
-    from_chain TEXT NOT NULL,
-    to_chain TEXT NOT NULL,
-    from_address TEXT,
-    to_address TEXT,
-    cctp_nonce TEXT,
-    attestation TEXT,
-    status TEXT DEFAULT 'pending',
-    created_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
 

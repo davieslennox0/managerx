@@ -1,84 +1,64 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 
-const S = {
-  wrap:{flex:1,overflowY:'auto',padding:'16px'},
-  chainLabel:(c)=>({fontFamily:'var(--font-mono)',fontSize:10,fontWeight:700,color:c==='sui'?'var(--sui)':'var(--arb)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:10,display:'block'}),
-  totalWrap:{marginBottom:14},
-  totalLabel:{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'0.1em'},
-  totalValue:{fontSize:22,fontWeight:800,lineHeight:1.1,marginTop:2},
-  totalChange:(up)=>({fontFamily:'var(--font-mono)',fontSize:10,color:up?'var(--green)':'var(--red)',marginTop:2}),
-  cashCard:(c)=>({padding:'8px 10px',borderRadius:7,background:c==='sui'?'rgba(77,162,255,0.06)':'rgba(40,160,240,0.06)',border:`1px solid ${c==='sui'?'rgba(77,162,255,0.2)':'rgba(40,160,240,0.2)'}`,display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}),
-  cashLabel:{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)'},
-  cashValue:(c)=>({fontFamily:'var(--font-mono)',fontSize:13,fontWeight:600,color:c==='sui'?'var(--sui)':'var(--arb)'}),
-  sectionTitle:{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8},
-  holding:{padding:'9px 10px',background:'var(--bg2)',border:'1px solid var(--border)',borderRadius:7,marginBottom:5},
-  holdingTop:{display:'flex',justifyContent:'space-between',alignItems:'center'},
-  holdingSymbol:{fontSize:12,fontWeight:700},
-  holdingValue:{fontFamily:'var(--font-mono)',fontSize:12},
-  holdingBottom:{display:'flex',justifyContent:'space-between',marginTop:3},
-  holdingShares:{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)'},
-  holdingChg:(up)=>({fontFamily:'var(--font-mono)',fontSize:9,color:up?'var(--green)':'var(--red)'}),
-  bar:{height:2,borderRadius:1,background:'var(--border)',marginTop:5,overflow:'hidden'},
-  barFill:(pct,up)=>({height:'100%',borderRadius:1,width:pct+'%',background:up?'var(--green)':'var(--red)'}),
-  empty:{color:'var(--text3)',fontFamily:'var(--font-mono)',fontSize:11,padding:'8px 0',lineHeight:1.8},
-  bridgeBtn:{width:'100%',padding:'8px',background:'transparent',border:'1px solid rgba(77,162,255,0.4)',borderRadius:7,color:'var(--sui)',fontSize:11,fontFamily:'var(--font-mono)',fontWeight:600,marginTop:8,cursor:'pointer'},
-};
+export default function Portfolio({ user, chain }) {
+  const [portfolio, setPortfolio] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const token = localStorage.getItem('managerx_token');
 
-export default function Portfolio({ user, portfolio, chain, onRefresh }) {
-  const isArb = chain === 'arbitrum';
-  const holdings = isArb ? (portfolio?.arbHoldings||[]) : (portfolio?.suiHoldings||[]);
-  const cash = isArb ? (portfolio?.arbCashBalance??10000) : (portfolio?.suiCashBalance??0);
-  const stockValue = isArb ? (portfolio?.arbStockValue??0) : (portfolio?.suiStockValue??0);
-  const total = cash + stockValue;
-  const totalCost = holdings.reduce((s,h)=>s+(h.avgPrice*h.shares),0);
-  const pnl = stockValue - totalCost;
-  const up = pnl >= 0;
-  const maxVal = Math.max(...holdings.map(h=>h.currentValue||0), 1);
+  useEffect(() => {
+    setLoading(true);
+    axios.get(`/api/portfolio/${chain}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).then(({ data }) => {
+      setPortfolio(data);
+    }).catch(console.error)
+      .finally(() => setLoading(false));
+  }, [chain]);
+
+  if (loading) return (
+    <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>Loading portfolio…</div>
+  );
 
   return (
-    <div style={S.wrap}>
-      <span style={S.chainLabel(chain)}>{isArb?'Arbitrum':'Sui'} Portfolio</span>
+    <div style={{ padding: 24, overflowY: 'auto' }}>
+      <h2 style={{ margin: '0 0 20px', fontWeight: 700, fontSize: 20 }}>Portfolio — {chain.toUpperCase()}</h2>
 
-      <div style={S.totalWrap}>
-        <div style={S.totalLabel}>Total Value</div>
-        <div style={S.totalValue}>${total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        {stockValue > 0 && <div style={S.totalChange(up)}>{up?'▲':'▼'} {up?'+':''}{pnl.toFixed(2)} all time</div>}
-      </div>
-
-      <div style={S.cashCard(chain)}>
-        <span style={S.cashLabel}>USDC Balance</span>
-        <span style={S.cashValue(chain)}>${cash.toLocaleString('en-US',{minimumFractionDigits:2})}</span>
-      </div>
-
-      <div style={S.sectionTitle}>Holdings</div>
-
-      {holdings.length === 0 ? (
-        <div style={S.empty}>
-          No {isArb?'Arbitrum':'Sui'} positions yet.<br/>
-          {isArb ? 'Try: "Buy 1 share of AAPLX"' : 'Try: "Buy 1 AAPL on Sui"'}
+      {/* Balances */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #eee' }}>
+          <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>USDC Balance</div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>${portfolio?.usdcBalance?.toFixed(2) || '0.00'}</div>
         </div>
-      ) : holdings.map((h,i) => {
-        const hUp = h.currentPrice >= h.avgPrice;
-        const pnlPct = ((h.currentPrice-h.avgPrice)/h.avgPrice*100).toFixed(2);
-        const pct = Math.min(100,((h.currentValue||0)/maxVal)*100);
-        return (
-          <div key={i} style={S.holding}>
-            <div style={S.holdingTop}>
-              <span style={S.holdingSymbol}>{h.symbol}</span>
-              <span style={S.holdingValue}>${(h.currentValue||0).toFixed(2)}</span>
-            </div>
-            <div style={S.holdingBottom}>
-              <span style={S.holdingShares}>{h.shares} sh @ ${h.avgPrice?.toFixed(2)}</span>
-              <span style={S.holdingChg(hUp)}>{hUp?'+':''}{pnlPct}%</span>
-            </div>
-            <div style={S.bar}><div style={S.barFill(pct,hUp)}/></div>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #eee' }}>
+          <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>Wallet</div>
+          <div style={{ fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+            {chain === 'solana' ? user.solAddress : user.evmAddress || 'Not connected'}
           </div>
-        );
-      })}
+        </div>
+      </div>
 
-      {!isArb && cash > 0 && (
-        <button style={S.bridgeBtn}>🌉 Bridge to Arbitrum via CCTP</button>
-      )}
+      {/* Positions */}
+      <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #eee', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #eee', fontWeight: 600 }}>Positions</div>
+        {portfolio?.trackedPositions?.length === 0 || !portfolio?.trackedPositions ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#888', fontSize: 14 }}>
+            No positions yet. Start trading in the chat.
+          </div>
+        ) : (
+          portfolio.trackedPositions.map(p => (
+            <div key={p.id} style={{ padding: '16px 20px', borderBottom: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontWeight: 600 }}>{p.symbol}</div>
+                <div style={{ fontSize: 12, color: '#888' }}>{p.shares} shares @ ${p.avg_price?.toFixed(2)}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontWeight: 600 }}>${(p.shares * p.avg_price).toFixed(2)}</div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }

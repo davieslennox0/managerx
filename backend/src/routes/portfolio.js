@@ -1,51 +1,48 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const db = require('../db');
-const { getPrice } = require('./prices');
+const { getArbPortfolio } = require('../lib/arbitrum');
+const { getSolPortfolio } = require('../lib/solana');
 
 const router = express.Router();
-function getUserId(req) { return req.headers['x-user-id'] || req.body?.userId; }
+const JWT_SECRET = process.env.JWT_SECRET || 'managerx_secret';
 
-router.get('/', (req, res) => {
-  const userId = getUserId(req);
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+function authUser(req) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return null;
+  try {
+    const { id } = jwt.verify(token, JWT_SECRET);
+    return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  } catch { return null; }
+}
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-  if (!user) return res.status(404).json({ error: 'Not found' });
+router.get('/:chain', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const arbHoldings = db.prepare("SELECT * FROM holdings WHERE user_id = ? AND chain = 'arbitrum'").all(userId);
-  const suiHoldings = db.prepare("SELECT * FROM holdings WHERE user_id = ? AND chain = 'sui'").all(userId);
+  const { chain } = req.params;
 
-  let arbValue = 0, arbCost = 0;
-  const enrichArb = arbHoldings.map(h => {
-    const p = getPrice(h.symbol) || h.avg_price;
-    const v = p * h.shares;
-    arbValue += v; arbCost += h.avg_price * h.shares;
-    return { symbol: h.symbol, shares: h.shares, avgPrice: h.avg_price, currentPrice: p, currentValue: v, chain: 'arbitrum' };
-  });
+  try {
+    let portfolio = {};
 
-  let suiValue = 0;
-  const enrichSui = suiHoldings.map(h => {
-    const p = getPrice(h.symbol) || h.avg_price;
-    const v = p * h.shares;
-    suiValue += v;
-    return { symbol: h.symbol, shares: h.shares, avgPrice: h.avg_price, currentPrice: p, currentValue: v, chain: 'sui' };
-  });
+    if (chain === 'arbitrum') {
+      portfolio = await getArbPortfolio(user.evm_address, user.id);
+    } else if (chain === 'solana') {
+      portfolio = await getSolPortfolio(user.sol_address, user.id);
+    } else if (chain === 'sui') {
+      portfolio = { chain: 'sui', address: user.sui_address, positions: [], usdcBalance: 0 };
+    }
 
-  res.json({
-    arbHoldings: enrichArb, suiHoldings: enrichSui,
-    arbCashBalance: user.arb_usdc_balance,
-    suiCashBalance: user.sui_usdc_balance,
-    arbStockValue: arbValue, suiStockValue: suiValue,
-    totalValue: arbValue + suiValue + user.arb_usdc_balance + user.sui_usdc_balance,
-    evmAddress: user.evm_address, suiAddress: user.sui_address,
-  });
-});
+    // Merge with local position tracking
+    const positions = db.prepare(
+      'SELECT * FROM positions WHERE user_id = ? AND chain = ?'
+    ).all(user.id, chain);
 
-router.get('/history', (req, res) => {
-  const userId = getUserId(req);
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-  const history = db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50').all(userId);
-  res.json({ history });
+    res.json({ ...portfolio, trackedPositions: positions });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Portfolio fetch failed' });
+  }
 });
 
 module.exports = router;

@@ -1,59 +1,71 @@
 import React, { useState, useEffect } from 'react';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useSolanaWallets, useWallets } from '@privy-io/react-auth';
 import axios from 'axios';
 import Onboarding from './components/Onboarding';
 import Dashboard from './components/Dashboard';
 
 export default function App() {
   const { ready, authenticated, user: privyUser, logout } = usePrivy();
+  const { wallets: evmWallets } = useWallets();
+  const { wallets: solWallets } = useSolanaWallets();
   const [user, setUser] = useState(null);
+  const [chain, setChain] = useState('arbitrum');
   const [loading, setLoading] = useState(true);
 
-  // Load saved session
   useEffect(() => {
-    const saved = localStorage.getItem('manager_user');
+    const saved = localStorage.getItem('managerx_user');
+    const savedChain = localStorage.getItem('managerx_chain');
     if (saved) setUser(JSON.parse(saved));
+    if (savedChain) setChain(savedChain);
     setLoading(false);
   }, []);
 
-  // Sync Privy login to backend
   useEffect(() => {
     if (!ready || !authenticated || !privyUser) return;
+
     const email = privyUser.email?.address || privyUser.google?.email;
-    const name = privyUser.google?.name || email;
     if (!email) return;
 
-    const evmWallet = privyUser.linkedAccounts?.find(
-      a => a.type === 'wallet' && a.chainType === 'ethereum'
-    );
-    const evmAddress = evmWallet?.address || null;
+    const evmWallet = evmWallets.find(w => w.walletClientType === 'privy');
+    const solWallet = solWallets.find(w => w.walletClientType === 'privy');
 
-    axios.post('/api/auth/google', { email, name, privyToken: null, evmAddress })
-      .then(({ data }) => {
-        localStorage.setItem('manager_user', JSON.stringify(data.user));
-        setUser(data.user);
-      })
-      .catch(console.error);
-  }, [ready, authenticated, privyUser]);
+    const evmAddress = evmWallet?.address || '';
+    const solAddress = solWallet?.address || '';
 
-  const handleLogin = (userData) => {
-    localStorage.setItem('manager_user', JSON.stringify(userData));
-    setUser(userData);
+    axios.post('/api/auth/sync', {
+      email,
+      name: privyUser.google?.name || email,
+      privyUserId: privyUser.id,
+      evmAddress,
+      solAddress,
+      suiAddress: '',
+    }).then(({ data }) => {
+      localStorage.setItem('managerx_user', JSON.stringify(data.user));
+      localStorage.setItem('managerx_token', data.token);
+      setUser(data.user);
+    }).catch(console.error);
+
+  }, [ready, authenticated, privyUser, evmWallets, solWallets]);
+
+  const handleChainChange = (newChain) => {
+    setChain(newChain);
+    localStorage.setItem('managerx_chain', newChain);
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('manager_user');
+    localStorage.removeItem('managerx_user');
+    localStorage.removeItem('managerx_chain');
     setUser(null);
     if (authenticated) logout();
   };
 
   if (loading || !ready) return (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
-      <div style={{ fontFamily: 'var(--font-mono)', color: 'var(--text3)', fontSize: 13 }}>Loading…</div>
+    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ fontFamily: 'monospace', color: '#888' }}>Loading…</div>
     </div>
   );
 
   return user
-    ? <Dashboard user={user} onLogout={handleLogout} />
-    : <Onboarding onLogin={handleLogin} />;
+    ? <Dashboard user={user} chain={chain} onChainChange={handleChainChange} onLogout={handleLogout} />
+    : <Onboarding onLogin={(u) => { localStorage.setItem('managerx_user', JSON.stringify(u)); setUser(u); }} />;
 }
