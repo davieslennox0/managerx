@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ConnectButton } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
@@ -61,7 +62,7 @@ function PriceTicker({ chain }) {
   );
 }
 
-export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone }) {
+export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, suiAccount }) {
   const [view, setView] = useState('chat');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState(null);
@@ -140,6 +141,11 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             {balance !== null && (
               <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.05em' }}>${parseFloat(balance || 0).toFixed(2)} USDC</div>
+            )}
+            {chain === 'sui' && (
+              <div style={{ fontSize: 9 }}>
+                <ConnectButton connectText="Connect Sui Wallet" />
+              </div>
             )}
             <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
               <button onClick={() => setDropdownOpen(!dropdownOpen)} style={{

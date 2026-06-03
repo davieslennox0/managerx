@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { usePrivy, useSolanaWallets, useWallets } from '@privy-io/react-auth';
+import { useCurrentAccount } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Onboarding from './components/Onboarding';
 import Dashboard from './components/Dashboard';
@@ -8,10 +9,10 @@ export default function App() {
   const { ready, authenticated, user: privyUser, logout } = usePrivy();
   const { wallets: evmWallets } = useWallets();
   const { wallets: solWallets } = useSolanaWallets();
+  const suiAccount = useCurrentAccount();
   const [user, setUser] = useState(null);
   const [chain, setChain] = useState('arbitrum');
   const [loading, setLoading] = useState(true);
-  const [showTour, setShowTour] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('managerx_user');
@@ -21,6 +22,7 @@ export default function App() {
     setLoading(false);
   }, []);
 
+  // Sync whenever Privy or Sui wallet changes
   useEffect(() => {
     if (!ready || !authenticated || !privyUser) return;
     const email = privyUser.email?.address || privyUser.google?.email;
@@ -28,8 +30,6 @@ export default function App() {
 
     const evmWallet = evmWallets.find(w => w.walletClientType === 'privy');
     const solWallet = solWallets.find(w => w.walletClientType === 'privy');
-    const suiAccount = privyUser.linkedAccounts?.find(a => a.type === 'wallet' && a.chainType === 'sui');
-
     const evmAddress = evmWallet?.address || '';
     const solAddress = solWallet?.address || '';
     const suiAddress = suiAccount?.address || '';
@@ -39,13 +39,12 @@ export default function App() {
       privyUserId: privyUser.id,
       evmAddress, solAddress, suiAddress,
     }).then(({ data }) => {
-      const isNew = !localStorage.getItem('managerx_user');
+      const isNew = !localStorage.getItem('managerx_token');
       localStorage.setItem('managerx_user', JSON.stringify(data.user));
       localStorage.setItem('managerx_token', data.token);
       setUser(data.user);
-      if (isNew) setShowTour(true);
     }).catch(console.error);
-  }, [ready, authenticated, privyUser, evmWallets, solWallets]);
+  }, [ready, authenticated, privyUser, evmWallets, solWallets, suiAccount]);
 
   const handleChainChange = (c) => { setChain(c); localStorage.setItem('managerx_chain', c); };
   const handleLogout = () => {
@@ -63,6 +62,6 @@ export default function App() {
   );
 
   return user
-    ? <Dashboard user={user} chain={chain} onChainChange={handleChainChange} onLogout={handleLogout} showTour={showTour} onTourDone={() => setShowTour(false)} />
-    : <Onboarding onLogin={(u) => { localStorage.setItem('managerx_user', JSON.stringify(u)); setUser(u); }} />;
+    ? <Dashboard user={user} chain={chain} onChainChange={handleChainChange} onLogout={handleLogout} suiAccount={suiAccount} />
+    : <Onboarding />;
 }
