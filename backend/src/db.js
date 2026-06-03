@@ -26,6 +26,15 @@ db.exec(`
     UNIQUE(user_id, chain, symbol)
   );
 
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    chain TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
