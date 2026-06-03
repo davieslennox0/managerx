@@ -41,3 +41,7 @@ cache/
 **/.env
 **/.env.save
 **/.env.local
+frontend/build/
+frontend/static/
+contracts-arb/sui*
+contracts-arb/move-analyzer
