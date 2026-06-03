@@ -23,7 +23,12 @@ export default function App() {
     const name = privyUser.google?.name || email;
     if (!email) return;
 
-    axios.post('/api/auth/google', { email, name, privyToken: null })
+    const evmWallet = privyUser.linkedAccounts?.find(
+      a => a.type === 'wallet' && a.chainType === 'ethereum'
+    );
+    const evmAddress = evmWallet?.address || null;
+
+    axios.post('/api/auth/google', { email, name, privyToken: null, evmAddress })
       .then(({ data }) => {
         localStorage.setItem('manager_user', JSON.stringify(data.user));
         setUser(data.user);
