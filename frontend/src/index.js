@@ -1,46 +1,31 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { PrivyProvider } from '@privy-io/react-auth';
-import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
-import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/dapp-kit';
-import { getFullnodeUrl } from '@mysten/sui/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import '@mysten/dapp-kit/dist/index.css';
-import { registerSlushWallet } from '@mysten/slush-wallet';
-registerSlushWallet("ManagerX");
+import {
+  DynamicContextProvider,
+} from '@dynamic-labs/sdk-react-core';
+import { EthereumWalletConnectors } from '@dynamic-labs/ethereum';
+import { SolanaWalletConnectors } from '@dynamic-labs/solana';
+import { SuiWalletConnectors } from '@dynamic-labs/sui';
 import App from './App';
 import './index.css';
 
-const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
-const queryClient = new QueryClient();
-const { networkConfig } = createNetworkConfig({
-  mainnet: { url: getFullnodeUrl('mainnet') },
-});
-
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <QueryClientProvider client={queryClient}>
-    <SuiClientProvider networks={networkConfig} defaultNetwork="mainnet">
-      <WalletProvider
-        autoConnect={false}
-        slushWalletConfig={{ name: 'ManagerX' }}
-      >
-        <PrivyProvider
-          appId="cmpeku47e000l0ci6ejcg63m5"
-          config={{
-            loginMethods: ['google', 'email'],
-            appearance: { theme: 'dark', accentColor: '#C9A84C' },
-            embeddedWallets: {
-              createOnLogin: 'users-without-wallets',
-              noPromptOnSignature: true,
-            },
-            solanaClusters: [{ name: 'mainnet-beta', rpcUrl: 'https://api.mainnet-beta.solana.com' }],
-            externalWallets: { solana: { connectors: solanaConnectors } },
-          }}
-        >
-          <App />
-        </PrivyProvider>
-      </WalletProvider>
-    </SuiClientProvider>
-  </QueryClientProvider>
+  <DynamicContextProvider
+    settings={{
+      environmentId: 'a2aa0b6a-4786-47f1-8758-ed3d968d05c7',
+      walletConnectors: [
+        EthereumWalletConnectors,
+        SolanaWalletConnectors,
+        SuiWalletConnectors,
+      ],
+      embeddedWallets: {
+        createOnLogin: 'all-users',
+        generateWalletOnLogin: true,
+      },
+      initialAuthenticationMode: 'connect-and-sign',
+    }}
+  >
+    <App />
+  </DynamicContextProvider>
 );

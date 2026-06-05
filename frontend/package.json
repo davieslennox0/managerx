@@ -3,18 +3,19 @@
   "version": "2.0.0",
   "private": true,
   "dependencies": {
-    "@mysten/dapp-kit": "^0.14.0",
+    "@dynamic-labs/ethereum": "^4.88.1",
+    "@dynamic-labs/sdk-react-core": "^4.88.1",
+    "@dynamic-labs/solana": "^4.88.1",
+    "@dynamic-labs/sui": "^4.88.1",
     "@mysten/sui": "^1.0.0",
+    "@solana/wallet-adapter-base": "^0.9.0",
+    "@solana/web3.js": "^1.98.0",
     "@tanstack/react-query": "^5.0.0",
-    "@privy-io/react-auth": "^1.80.0",
     "ajv": "^8.20.0",
     "axios": "^1.6.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1",
-    "@solana/web3.js": "^1.98.0",
-    "@solana/wallet-adapter-base": "^0.9.0",
-    "@mysten/slush-wallet": "^0.2.1"
+    "react-scripts": "5.0.1"
   },
   "scripts": {
     "start": "react-scripts start",

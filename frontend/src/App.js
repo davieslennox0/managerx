@@ -1,84 +1,84 @@
 import React, { useState, useEffect } from 'react';
-import { usePrivy, useSolanaWallets, useWallets } from '@privy-io/react-auth';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import {
+  useDynamicContext,
+  DynamicWidget,
+} from '@dynamic-labs/sdk-react-core';
+import { isEthereumWallet } from '@dynamic-labs/ethereum';
+import { isSolanaWallet } from '@dynamic-labs/solana';
 import axios from 'axios';
-import Onboarding from './components/Onboarding';
 import Dashboard from './components/Dashboard';
+import Onboarding from './components/Onboarding';
 
 export default function App() {
-  const { ready, authenticated, user: privyUser, logout } = usePrivy();
-  const { wallets: evmWallets } = useWallets();
-  const { wallets: solWallets } = useSolanaWallets();
-  const suiAccount = useCurrentAccount();
-  const { exportWallet } = usePrivy();
-  const [user, setUser] = useState(null);
-  const [chain, setChain] = useState('arbitrum');
-  const [loading, setLoading] = useState(true);
+  const {
+    user: dynamicUser,
+    primaryWallet,
+    userWallets,
+    handleLogOut,
+    setShowAuthFlow,
+  } = useDynamicContext();
+
+  const [user, setUser] = useState(() => {
+    const stored = localStorage.getItem('managerx_user');
+    return stored ? JSON.parse(stored) : null;
+  });
+  const [chain, setChain] = useState(
+    () => localStorage.getItem('managerx_chain') || 'arbitrum'
+  );
+  const [showTour, setShowTour] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('managerx_user');
-    const savedChain = localStorage.getItem('managerx_chain');
-    if (saved) setUser(JSON.parse(saved));
-    if (savedChain) setChain(savedChain);
-    setLoading(false);
-  }, []);
+    if (!dynamicUser || !userWallets?.length) return;
 
-  // Sync whenever Privy or Sui wallet changes
-  useEffect(() => {
-    if (!ready || !authenticated || !privyUser) return;
-    const email = privyUser.email?.address || privyUser.google?.email;
-    if (!email) return;
+    const evmWallet = userWallets.find(w => isEthereumWallet(w));
+    const solWallet = userWallets.find(w => isSolanaWallet(w));
+    const suiWallet = userWallets.find(w => w.chain === 'SUI' || w.chain === 'sui');
 
-    const evmWallet = evmWallets.find(w => w.walletClientType === 'privy');
-    const solWallet = solWallets.find(w => w.walletClientType === 'privy');
-    const evmAddress = evmWallet?.address || '';
-    const solAddress = solWallet?.address || '';
-    const suiAddress = suiAccount?.address || '';
+    const email = dynamicUser.email || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId;
+    const name = dynamicUser.firstName || dynamicUser.alias || email?.split('@')[0];
 
     axios.post('/api/auth/sync', {
-      email, name: privyUser.google?.name || email,
-      privyUserId: privyUser.id,
-      evmAddress, solAddress, suiAddress,
+      email,
+      name,
+      privyUserId: dynamicUser.userId,
+      evmAddress: evmWallet?.address || '',
+      solAddress: solWallet?.address || '',
+      suiAddress: suiWallet?.address || '',
     }).then(({ data }) => {
       const isNew = !localStorage.getItem('managerx_token');
       localStorage.setItem('managerx_user', JSON.stringify(data.user));
       localStorage.setItem('managerx_token', data.token);
       setUser(data.user);
+      if (isNew) setShowTour(true);
     }).catch(console.error);
-  }, [ready, authenticated, privyUser, evmWallets, solWallets, suiAccount]);
+  }, [dynamicUser, userWallets]);
 
-  // Dedicated effect to sync Solana wallet when it becomes available
-  useEffect(() => {
-    if (!user) return;
-    const solWallet = solWallets.find(w => w.walletClientType === 'privy');
-    if (!solWallet?.address) return;
-    const token = localStorage.getItem('managerx_token');
-    axios.post('/api/auth/sync', {
-      email: user.email,
-      solAddress: solWallet.address,
-    }, { headers: { Authorization: `Bearer ${token}` } })
-    .then(({ data }) => {
-      localStorage.setItem('managerx_user', JSON.stringify(data.user));
-      setUser(data.user);
-    }).catch(() => {});
-  }, [solWallets, user?.email]);
-
-  const handleChainChange = (c) => { setChain(c); localStorage.setItem('managerx_chain', c); };
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await handleLogOut();
     localStorage.removeItem('managerx_user');
-    localStorage.removeItem('managerx_chain');
     localStorage.removeItem('managerx_token');
+    localStorage.removeItem('managerx_chain');
     setUser(null);
-    if (authenticated) logout();
   };
 
-  if (loading || !ready) return (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0C0C10' }}>
-      <div style={{ fontFamily: 'Georgia, serif', color: '#C9A84C', fontSize: 13, letterSpacing: '0.2em' }}>LOADING…</div>
-    </div>
-  );
+  const handleChainChange = (c) => {
+    setChain(c);
+    localStorage.setItem('managerx_chain', c);
+  };
 
-  return user
-    ? <Dashboard user={user} chain={chain} onChainChange={handleChainChange} onLogout={handleLogout} suiAccount={suiAccount} onExportWallet={exportWallet} />
-    : <Onboarding />;
+  if (!dynamicUser || !user) {
+    return <Onboarding onLogin={() => setShowAuthFlow(true)} />;
+  }
+
+  return (
+    <Dashboard
+      user={user}
+      chain={chain}
+      onChainChange={handleChainChange}
+      onLogout={handleLogout}
+      showTour={showTour}
+      onTourDone={() => setShowTour(false)}
+      userWallets={userWallets}
+    />
+  );
 }

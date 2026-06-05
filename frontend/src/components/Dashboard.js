@@ -1,43 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useCurrentAccount, useDisconnectWallet, useConnectWallet, useWallets } from '@mysten/dapp-kit';
+
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
 
 // ── Sui Wallet Connect ────────────────────────────────────────────────────────
-function SuiConnectBtn() {
-  const account = useCurrentAccount();
-  const { mutate: disconnect } = useDisconnectWallet();
-  const wallets = useWallets();
-  const { mutate: connect } = useConnectWallet();
-
-  const handleConnect = async () => {
-    const slush = wallets.find(w => w.name === 'Slush Wallet' || w.name === 'Slush');
-    const wallet = slush || wallets[0];
-    if (wallet) {
-      try { connect({ wallet }); }
-      catch (e) { console.error('Connect failed', e); }
-    }
-  };
-
-  const btn = {
-    background: 'none', border: '1px solid #C9A84C50',
-    color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-    fontSize: 9, letterSpacing: '0.1em',
-    fontFamily: 'Georgia, serif', borderRadius: 4,
-  };
-
-  if (account) {
-    return (
-      <button onClick={() => disconnect()} style={btn}>
-        {account.address.slice(0,6)}...{account.address.slice(-4)} ✓
-      </button>
-    );
-  }
-
-  return <button onClick={handleConnect} style={btn}>CONNECT SUI</button>;
-}
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 const CHAINS = [
   { id: 'arbitrum', label: 'Arbitrum', short: 'ARB', desc: 'Robinhood Stocks' },
@@ -102,13 +69,12 @@ function PriceTicker({ chain }) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
-export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, onExportWallet }) {
+export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, userWallets }) {
   const [view, setView] = useState('chat');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState(null);
   const activeChain = CHAINS.find(c => c.id === chain) || CHAINS[0];
   const token = localStorage.getItem('managerx_token');
-  const suiAccount = useCurrentAccount();
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -123,15 +89,6 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
       .catch(() => {});
   }, [chain]);
 
-  // Sync Sui address to backend when connected
-  useEffect(() => {
-    if (suiAccount && chain === 'sui') {
-      axios.post('/api/auth/sync', {
-        email: user.email,
-        suiAddress: suiAccount.address,
-      }, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
-    }
-  }, [suiAccount]);
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'Georgia, serif', background: '#0C0C10', color: '#E8DCC8' }}
@@ -170,12 +127,12 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
           <div style={{ fontSize: 11, color: '#777', marginBottom: 2 }}>{user.name || user.email?.split('@')[0]}</div>
           <div style={{ fontSize: 8, color: '#2A2A30', marginBottom: 10, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {chain === 'sui'
-              ? (suiAccount?.address?.slice(0, 14) || user.suiAddress?.slice(0, 14) || 'No wallet')
+              ? (user.suiAddress?.slice(0, 14) || 'No wallet')
               : user.evmAddress?.slice(0, 14)
             }…
           </div>
           <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif', marginBottom: 4 }}>SIGN OUT</button>
-          <button onClick={onExportWallet} style={{ fontSize: 8, color: '#555', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif' }}>EXPORT KEY</button>
+          
         </div>
       </div>
 
@@ -199,7 +156,7 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
                 ${parseFloat(balance || 0).toFixed(2)} USDC
               </div>
             )}
-            {chain === 'sui' && <SuiConnectBtn />}
+            
             <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
               <button onClick={() => setDropdownOpen(!dropdownOpen)} style={{
                 display: 'flex', alignItems: 'center', gap: 6,
