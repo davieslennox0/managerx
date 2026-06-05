@@ -24,7 +24,7 @@ function SuiConnectBtn() {
     );
   }
 
-  console.log('Detected wallets:', wallets.map(w => ({ name: w.name, id: w.id })));
+  console.log('ALL wallets:', wallets.map(w => w.name));
   if (wallets.length === 0) {
     return (
       <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
@@ -37,12 +37,15 @@ function SuiConnectBtn() {
   }
 
   return (
-    <button onClick={() => connect({ wallet: wallets[0] })} style={{
+    <button onClick={() => {
+      console.log('Connecting to:', wallets[0]?.name);
+      connect({ wallet: wallets[0] });
+    }} style={{
       background: 'none', border: '1px solid #C9A84C50',
       color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
       fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
     }}>
-      CONNECT SUI ({wallets.length})
+      {wallets[0]?.name || 'CONNECT SUI'}
     </button>
   );
 }
