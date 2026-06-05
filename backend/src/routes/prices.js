@@ -6,8 +6,11 @@ const router = express.Router();
 let cache = { data: null, ts: 0 };
 
 const STOCKS = {
-  arbitrum: ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL'],
-  sui: ['TSLA', 'AAPL', 'NVDA', 'SPY', 'META'],
+  arbitrum: ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'COIN', 'MSTR', 'NFLX'],
+  sui: ['TSLA', 'AAPL', 'NVDA', 'SPY', 'META', 'MSFT', 'GOOGL', 'AMZN', 'COIN', 'MSTR',
+        'PLTR', 'NFLX', 'JPM', 'GS', 'BAC', 'MA', 'V', 'WMT', 'MCD', 'KO',
+        'PEP', 'PG', 'JNJ', 'PFE', 'MRK', 'LLY', 'UNH', 'ABT', 'ABBV', 'DHR',
+        'TMO', 'XOM', 'CVX', 'AVGO', 'INTC', 'IBM', 'ORCL', 'CRM', 'CRWD', 'HOOD'],
 };
 
 router.get('/:chain', async (req, res) => {

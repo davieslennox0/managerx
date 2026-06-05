@@ -54,8 +54,9 @@ router.post('/', async (req, res) => {
 
     // Fetch live prices for top assets
     const topSymbols = chain === 'arbitrum'
-      ? ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'SPY']
-      : ['TSLA', 'AAPL', 'NVDA', 'SPY', 'META'];
+      ? ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'COIN', 'MSTR', 'NFLX']
+      : ['TSLA', 'AAPL', 'NVDA', 'SPY', 'META', 'MSFT', 'GOOGL', 'AMZN', 'COIN', 'MSTR',
+         'PLTR', 'NFLX', 'JPM', 'GS', 'BAC', 'MA', 'V', 'WMT', 'MCD', 'HOOD'];
     const priceResults = await Promise.all(topSymbols.map(async s => {
       const p = await getPrice(s).catch(() => null);
       return p ? `${s}: ${p.price}` : null;
