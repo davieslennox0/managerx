@@ -38,9 +38,15 @@ export default function App() {
       try { await createEmbeddedWallet({ chain: 'SOL' }); } catch (e) { console.log('SOL wallet create:', e.message); }
     }
 
+    console.log('All wallets:', JSON.stringify(userWallets.map(w => ({
+      address: w.address, chain: w.chain, network: w.network
+    }))));
     const evmWallet = userWallets.find(w => isEthereumWallet(w));
     const solWallet = userWallets.find(w => isSolanaWallet(w));
-    const suiWallet = userWallets.find(w => w.chain === 'SUI' || w.chain === 'sui');
+    const suiWallet = userWallets.find(w => 
+      w.chain === 'SUI' || w.chain === 'sui' || 
+      w.network === 'sui' || w.address?.startsWith('0x') && w.chain !== 'evm'
+    );
 
     const email = dynamicUser.email || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId;
     const name = dynamicUser.firstName || dynamicUser.alias || email?.split('@')[0];
