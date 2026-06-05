@@ -56,16 +56,19 @@ function SuiConnectBtn() {
             {wallets.length === 0 ? (
               <div>
                 <div style={{ fontSize: 12, color: '#888', marginBottom: 20, lineHeight: 1.7 }}>
-                  No Sui wallet detected. Get Slush — the easiest Sui wallet.
+                  Connect your Sui wallet to trade xStocks.
                 </div>
-                <a href="https://my.slush.app" target="_blank" rel="noreferrer" style={{
+                <a href="https://my.slush.app" target="_blank" rel="noreferrer" onClick={() => setShowModal(false)} style={{
                   display: 'block', padding: '12px', background: '#C9A84C',
                   color: '#0C0C10', borderRadius: 8, textAlign: 'center',
                   textDecoration: 'none', fontSize: 11, fontWeight: 700,
-                  letterSpacing: '0.1em',
+                  letterSpacing: '0.1em', marginBottom: 8,
                 }}>
-                  GET SLUSH WALLET ↗
+                  OPEN SLUSH WALLET ↗
                 </a>
+                <div style={{ fontSize: 9, color: '#444', textAlign: 'center', letterSpacing: '0.05em' }}>
+                  Works on mobile · No seed phrases needed
+                </div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
