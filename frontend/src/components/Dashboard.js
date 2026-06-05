@@ -1,57 +1,140 @@
 import React, { useState, useEffect } from 'react';
-import { ConnectModal, useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
+import { useCurrentAccount, useDisconnectWallet, useConnectWallet, useWallets } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
 
-
-
+// ── Sui Wallet Connect ────────────────────────────────────────────────────────
 function SuiConnectBtn() {
   const account = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
-  const [open, setOpen] = React.useState(false);
+  const { mutate: connect } = useConnectWallet();
+  const wallets = useWallets();
+  const [showModal, setShowModal] = useState(false);
+
+  const btn = {
+    background: 'none',
+    border: '1px solid #C9A84C50',
+    color: '#C9A84C',
+    padding: '5px 12px',
+    cursor: 'pointer',
+    fontSize: 9,
+    letterSpacing: '0.1em',
+    fontFamily: 'Georgia, serif',
+    borderRadius: 4,
+  };
 
   if (account) {
     return (
-      <button onClick={() => disconnect()} style={{
-        background: 'none', border: '1px solid #C9A84C50',
-        color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-        fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
-      }}>
-        {account.address.slice(0,6)}...{account.address.slice(-4)} ✓
+      <button onClick={() => disconnect()} style={btn}>
+        {account.address.slice(0, 6)}…{account.address.slice(-4)} ✓
       </button>
     );
   }
 
   return (
-    <ConnectModal
-      trigger={
-        <button style={{
-          background: 'none', border: '1px solid #C9A84C50',
-          color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-          fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
+    <>
+      <button onClick={() => setShowModal(true)} style={btn}>
+        CONNECT SUI
+      </button>
+
+      {showModal && (
+        <div onClick={() => setShowModal(false)} style={{
+          position: 'fixed', inset: 0, background: '#000000AA',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 9999, fontFamily: 'Georgia, serif',
         }}>
-          CONNECT SUI
-        </button>
-      }
-      open={open}
-      onOpenChange={setOpen}
-    />
+          <div onClick={e => e.stopPropagation()} style={{
+            background: '#0E0E14', border: '1px solid #C9A84C30',
+            borderRadius: 14, padding: '32px', width: 340, maxWidth: '90vw',
+          }}>
+            <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.2em', marginBottom: 20 }}>
+              CONNECT SUI WALLET
+            </div>
+
+            {wallets.length === 0 ? (
+              <div>
+                <div style={{ fontSize: 12, color: '#888', marginBottom: 20, lineHeight: 1.7 }}>
+                  No Sui wallet detected. Get Slush — the easiest Sui wallet.
+                </div>
+                <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
+                  display: 'block', padding: '12px', background: '#C9A84C',
+                  color: '#0C0C10', borderRadius: 8, textAlign: 'center',
+                  textDecoration: 'none', fontSize: 11, fontWeight: 700,
+                  letterSpacing: '0.1em',
+                }}>
+                  GET SLUSH WALLET ↗
+                </a>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, color: '#555', marginBottom: 8 }}>
+                  Select wallet to connect:
+                </div>
+                {wallets.map(wallet => (
+                  <button key={wallet.name} onClick={() => {
+                    connect({ wallet });
+                    setShowModal(false);
+                  }} style={{
+                    padding: '12px 16px', background: '#12121A',
+                    border: '1px solid #1C1C22', borderRadius: 8,
+                    cursor: 'pointer', textAlign: 'left',
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    transition: 'border-color 0.15s',
+                  }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor = '#C9A84C40'}
+                    onMouseLeave={e => e.currentTarget.style.borderColor = '#1C1C22'}
+                  >
+                    {wallet.icon && (
+                      <img src={wallet.icon} alt={wallet.name} style={{ width: 28, height: 28, borderRadius: 6 }} />
+                    )}
+                    <div>
+                      <div style={{ fontSize: 12, color: '#E8DCC8', fontWeight: 600 }}>{wallet.name}</div>
+                      <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
+                        {wallet.accounts?.length > 0 ? `${wallet.accounts.length} account(s)` : 'Click to connect'}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                <div style={{ marginTop: 8, textAlign: 'center' }}>
+                  <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
+                    fontSize: 9, color: '#444', textDecoration: 'none', letterSpacing: '0.1em',
+                  }}>
+                    Don't have Slush? Get it here ↗
+                  </a>
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => setShowModal(false)} style={{
+              marginTop: 16, width: '100%', padding: '8px',
+              background: 'none', border: '1px solid #1C1C22',
+              color: '#555', borderRadius: 6, cursor: 'pointer',
+              fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif',
+            }}>
+              CANCEL
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
+// ── Constants ─────────────────────────────────────────────────────────────────
 const CHAINS = [
   { id: 'arbitrum', label: 'Arbitrum', short: 'ARB', desc: 'Robinhood Stocks' },
-  { id: 'sui', label: 'Sui', short: 'SUI', desc: 'xStocks' },
+  { id: 'sui',      label: 'Sui',      short: 'SUI', desc: 'xStocks' },
 ];
 
 const TOUR_STEPS = [
   { title: 'Welcome to ManagerX', body: 'Your AI-powered portfolio agent for tokenized stocks. Trade Robinhood stocks on Arbitrum or xStocks on Sui.' },
   { title: 'Switch Networks', body: 'Use the dropdown in the top right to switch between Arbitrum (Robinhood stocks) and Sui (xStocks via CCTP).' },
   { title: 'Fund Your Wallet', body: 'Go to Portfolio → click your wallet address → copy it and send USDC to start trading.' },
-  { title: 'Start Trading', body: 'Just chat naturally. Say "Buy $100 of NVDAX" or "What\'s TSLA trading at?" — your AI agent handles the rest.' },
+  { title: 'Start Trading', body: 'Just chat naturally. Say "Buy $100 of NVDAx" or "What\'s TSLA trading at?" — your AI agent handles the rest.' },
 ];
 
+// ── Tour ──────────────────────────────────────────────────────────────────────
 function Tour({ onDone }) {
   const [step, setStep] = useState(0);
   const current = TOUR_STEPS[step];
@@ -72,11 +155,14 @@ function Tour({ onDone }) {
   );
 }
 
+// ── Price Ticker ──────────────────────────────────────────────────────────────
 function PriceTicker({ chain }) {
   const [prices, setPrices] = useState({});
+
   useEffect(() => {
-    axios.get(`/api/prices/${chain}`).then(({ data }) => setPrices(data)).catch(() => {});
-    const t = setInterval(() => axios.get(`/api/prices/${chain}`).then(({ data }) => setPrices(data)).catch(() => {}), 60000);
+    const fetch = () => axios.get(`/api/prices/${chain}`).then(({ data }) => setPrices(data)).catch(() => {});
+    fetch();
+    const t = setInterval(fetch, 60000);
     return () => clearInterval(t);
   }, [chain]);
 
@@ -98,12 +184,14 @@ function PriceTicker({ chain }) {
   );
 }
 
-export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, suiAccount, onExportWallet }) {
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, onExportWallet }) {
   const [view, setView] = useState('chat');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState(null);
   const activeChain = CHAINS.find(c => c.id === chain) || CHAINS[0];
   const token = localStorage.getItem('managerx_token');
+  const suiAccount = useCurrentAccount();
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -117,6 +205,16 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
       .then(({ data }) => setBalance(data.usdcBalance))
       .catch(() => {});
   }, [chain]);
+
+  // Sync Sui address to backend when connected
+  useEffect(() => {
+    if (suiAccount && chain === 'sui') {
+      axios.post('/api/auth/sync', {
+        email: user.email,
+        suiAddress: suiAccount.address,
+      }, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+    }
+  }, [suiAccount]);
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'Georgia, serif', background: '#0C0C10', color: '#E8DCC8' }}
@@ -154,7 +252,10 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
           <div style={{ fontSize: 7, color: '#2A2A30', letterSpacing: '0.25em', marginBottom: 6 }}>CLIENT</div>
           <div style={{ fontSize: 11, color: '#777', marginBottom: 2 }}>{user.name || user.email?.split('@')[0]}</div>
           <div style={{ fontSize: 8, color: '#2A2A30', marginBottom: 10, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {(chain === 'sui' ? user.suiAddress : user.evmAddress)?.slice(0, 14)}…
+            {chain === 'sui'
+              ? (suiAccount?.address?.slice(0, 14) || user.suiAddress?.slice(0, 14) || 'No wallet')
+              : user.evmAddress?.slice(0, 14)
+            }…
           </div>
           <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif', marginBottom: 4 }}>SIGN OUT</button>
           <button onClick={onExportWallet} style={{ fontSize: 8, color: '#555', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif' }}>EXPORT KEY</button>
@@ -177,7 +278,9 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
             {balance !== null && (
-              <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.05em' }}>${parseFloat(balance || 0).toFixed(2)} USDC</div>
+              <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.05em' }}>
+                ${parseFloat(balance || 0).toFixed(2)} USDC
+              </div>
             )}
             {chain === 'sui' && <SuiConnectBtn />}
             <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
