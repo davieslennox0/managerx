@@ -15,10 +15,15 @@ const CHAIN_CONTEXT = {
   },
   solana: {
     name: 'Solana',
-    assets: `xStocks by Backed Finance:
-    TSLAx (Tesla), AAPLx (Apple), NVDAx (Nvidia), SPYx (S&P 500),
-    METAx (Meta), GOOGLx (Google), COINx (Coinbase), MSTRx (MicroStrategy),
-    CRCLx (Circle), QQQx (Nasdaq ETF)`,
+    assets: `xStocks by Backed Finance (now Kraken) — 60+ tokenized US stocks on Solana:
+    TSLAx, AAPLx, NVDAx, MSFTx, METAx, GOOGLx, AMZNx, SPYx, QQQx, TQQQx,
+    COINx, MSTRx, CRCLx, HOODx, PLTRx, NFLXx, JPMx, GSx, BACx, MAx,
+    Vx, WMTx, MCDx, KOx, PEPx, PGx, JNJx, PFEx, MRKx, LLYx, UNHx,
+    ABTx, ABBVx, MDTx, DHRx, TMOx, XOMx, CVXx, LINx, HONx, CSCOx,
+    INTCx, IBMx, ORCLx, CRMx, CRWDx, AVGOx, MRVLx, NVOx, AZNx,
+    HDx, ACNx, CMCSAx, PMx, BRKBx, GLDx, VTIx, TBLLx, GSx, GMEx,
+    AMBRx, APPx, DFDVx, HONx, OPENx, PEPx and more.
+    All 1:1 backed by real shares. Trade 24/7 via Jupiter on Solana.`,
     currency: 'USDC on Solana',
     dex: 'Jupiter aggregator',
   },
