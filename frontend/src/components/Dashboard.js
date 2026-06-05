@@ -1,143 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { useCurrentAccount, useDisconnectWallet, useConnectWallet, useWallets } from '@mysten/dapp-kit';
+import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
 
 // ── Sui Wallet Connect ────────────────────────────────────────────────────────
 function SuiConnectBtn() {
-  const connectSlushWeb = () => {
-    // Open Slush web app in popup - it registers itself via wallet standard
-    const popup = window.open(
-      'https://my.slush.app',
-      'slush_wallet',
-      'width=400,height=600,popup=yes'
-    );
-    // Poll for wallet registration
-    const interval = setInterval(() => {
-      if (popup?.closed) {
-        clearInterval(interval);
-        // Wallet should now be registered, trigger connect
-        window.dispatchEvent(new Event('wallet-registered'));
-      }
-    }, 500);
-  };
   const account = useCurrentAccount();
-  const { mutate: disconnect } = useDisconnectWallet();
-  const { mutate: connect } = useConnectWallet();
-  const allWallets = useWallets();
-  const wallets = allWallets.filter(w => !w.name.toLowerCase().includes("leap") && !w.name.toLowerCase().includes("nightly"));
-  const [showModal, setShowModal] = useState(false);
-
-  const btn = {
-    background: 'none',
-    border: '1px solid #C9A84C50',
-    color: '#C9A84C',
-    padding: '5px 12px',
-    cursor: 'pointer',
-    fontSize: 9,
-    letterSpacing: '0.1em',
-    fontFamily: 'Georgia, serif',
-    borderRadius: 4,
-  };
-
-  if (account) {
-    return (
-      <button onClick={() => disconnect()} style={btn}>
-        {account.address.slice(0, 6)}…{account.address.slice(-4)} ✓
-      </button>
-    );
-  }
-
   return (
-    <>
-      <button onClick={() => setShowModal(true)} style={btn}>
-        CONNECT SUI
-      </button>
-
-      {showModal && (
-        <div onClick={() => setShowModal(false)} style={{
-          position: 'fixed', inset: 0, background: '#000000AA',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 9999, fontFamily: 'Georgia, serif',
-        }}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: '#0E0E14', border: '1px solid #C9A84C30',
-            borderRadius: 14, padding: '32px', width: 340, maxWidth: '90vw',
-          }}>
-            <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.2em', marginBottom: 20 }}>
-              CONNECT SUI WALLET
-            </div>
-
-            {wallets.length === 0 ? (
-              <div>
-                <div style={{ fontSize: 12, color: '#888', marginBottom: 20, lineHeight: 1.7 }}>
-                  Connect your Sui wallet to trade xStocks.
-                </div>
-                <button onClick={connectSlushWeb} style={{
-                  display: 'block', width: '100%', padding: '12px', background: '#C9A84C',
-                  color: '#0C0C10', borderRadius: 8, textAlign: 'center',
-                  border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                  letterSpacing: '0.1em', marginBottom: 8,
-                }}>
-                  CONNECT WITH SLUSH ↗
-                </button>
-                <div style={{ fontSize: 9, color: '#444', textAlign: 'center', letterSpacing: '0.05em' }}>
-                  Works on mobile · No seed phrases needed
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontSize: 11, color: '#555', marginBottom: 8 }}>
-                  Select wallet to connect:
-                </div>
-                {wallets.map(wallet => (
-                  <button key={wallet.name} onClick={() => {
-                    connect({ wallet });
-                    setShowModal(false);
-                  }} style={{
-                    padding: '12px 16px', background: '#12121A',
-                    border: '1px solid #1C1C22', borderRadius: 8,
-                    cursor: 'pointer', textAlign: 'left',
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    transition: 'border-color 0.15s',
-                  }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = '#C9A84C40'}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = '#1C1C22'}
-                  >
-                    {wallet.icon && (
-                      <img src={wallet.icon} alt={wallet.name} style={{ width: 28, height: 28, borderRadius: 6 }} />
-                    )}
-                    <div>
-                      <div style={{ fontSize: 12, color: '#E8DCC8', fontWeight: 600 }}>{wallet.name}</div>
-                      <div style={{ fontSize: 9, color: '#555', marginTop: 2 }}>
-                        {wallet.accounts?.length > 0 ? `${wallet.accounts.length} account(s)` : 'Click to connect'}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                <div style={{ marginTop: 8, textAlign: 'center' }}>
-                  <a href="https://my.slush.app" target="_blank" rel="noreferrer" style={{
-                    fontSize: 9, color: '#444', textDecoration: 'none', letterSpacing: '0.1em',
-                  }}>
-                    Don't have Slush? Get it here ↗
-                  </a>
-                </div>
-              </div>
-            )}
-
-            <button onClick={() => setShowModal(false)} style={{
-              marginTop: 16, width: '100%', padding: '8px',
-              background: 'none', border: '1px solid #1C1C22',
-              color: '#555', borderRadius: 6, cursor: 'pointer',
-              fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif',
-            }}>
-              CANCEL
-            </button>
-          </div>
-        </div>
-      )}
-    </>
+    <div style={{ fontSize: 9 }}>
+      <ConnectButton
+        connectText='CONNECT SUI'
+        style={{
+          background: 'none',
+          border: '1px solid #C9A84C50',
+          color: '#C9A84C',
+          padding: '5px 12px',
+          fontSize: 9,
+          letterSpacing: '0.1em',
+          fontFamily: 'Georgia, serif',
+          borderRadius: 4,
+          cursor: 'pointer',
+        }}
+      />
+    </div>
   );
 }
 
