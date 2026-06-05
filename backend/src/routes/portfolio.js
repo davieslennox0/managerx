@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const db = require('../db');
 const { getArbPortfolio } = require('../lib/arbitrum');
 const { getSolPortfolio } = require('../lib/solana');
+const { getSuiPortfolio } = require('../lib/sui');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'managerx_secret';
@@ -30,7 +31,19 @@ router.get('/:chain', async (req, res) => {
     } else if (chain === 'solana') {
       portfolio = await getSolPortfolio(user.sol_address, user.id);
     } else if (chain === 'sui') {
-      portfolio = { chain: 'sui', address: user.sui_address, positions: [], usdcBalance: 0 };
+      // For SUI tab, read from the Solana wallet (where xStocks actually live)
+      // and also check Sui USDC balance
+      const solPortfolio = await getSolPortfolio(user.sol_address, user.id).catch(() => ({}));
+      const suiPortfolio = await getSuiPortfolio(user.sui_address, user.id).catch(() => ({}));
+      portfolio = {
+        chain: 'sui',
+        suiAddress: user.sui_address,
+        solAddress: user.sol_address,
+        usdcBalance: (suiPortfolio.usdcBalance || 0) + (solPortfolio.usdcBalance || 0),
+        suiUsdcBalance: suiPortfolio.usdcBalance || 0,
+        solUsdcBalance: solPortfolio.usdcBalance || 0,
+        positions: solPortfolio.positions || [],
+      };
     }
 
     // Merge with local position tracking

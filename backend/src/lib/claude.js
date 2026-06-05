@@ -24,10 +24,14 @@ const CHAIN_CONTEXT = {
   },
   sui: {
     name: 'Sui',
-    assets: `xStocks bridged from Solana via CCTP:
-    TSLAx, AAPLx, NVDAx, SPYx, METAx, GOOGLx, COINx, MSTRx`,
-    currency: 'USDC on Sui',
-    dex: 'DeepBook / Jupiter via CCTP bridge',
+    assets: `xStocks by Backed Finance (Kraken) — 74 tokenized US stocks on Solana, accessible via Sui:
+    TSLAx (Tesla), AAPLx (Apple), NVDAx (Nvidia), SPYx (S&P 500 ETF),
+    METAx (Meta), GOOGLx (Google), AMZNx (Amazon), MSFTx (Microsoft),
+    COINx (Coinbase), MSTRx (MicroStrategy), CRCLx (Circle), QQQx (Nasdaq ETF),
+    and 60+ more. Each is 1:1 backed by real shares held by regulated custodians.`,
+    currency: 'USDC on Sui (bridged to Solana via CCTP for execution)',
+    dex: 'Jupiter aggregator on Solana',
+    note: 'User deposits USDC on Sui. Agent bridges via CCTP to Solana, buys xStocks on Jupiter, position tracked on Sui.',
   },
 };
 
