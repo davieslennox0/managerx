@@ -1,55 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useConnectWallet, useWallets, useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
+import { ConnectButton } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
 
 
-function SuiWalletButton() {
-  const { mutate: connect } = useConnectWallet();
-  const { mutate: disconnect } = useDisconnectWallet();
-  const wallets = useWallets();
-  const account = useCurrentAccount();
-
-  if (account) {
-    return (
-      <button onClick={() => disconnect()} style={{
-        background: 'none', border: '1px solid #C9A84C40',
-        color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-        fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
-      }}>
-        {account.address.slice(0, 6)}...{account.address.slice(-4)} ✓
-      </button>
-    );
-  }
-
-  console.log('Available wallets:', wallets.map(w => w.name));
-  const slush = wallets.find(w => w.name.toLowerCase().includes('slush'));
-  const wallet = slush || wallets[0];
-
-  if (!wallet) {
-    return (
-      <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
-        background: 'none', border: '1px solid #C9A84C40',
-        color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-        fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
-        textDecoration: 'none',
-      }}>
-        GET SLUSH →
-      </a>
-    );
-  }
-
-  return (
-    <button onClick={() => connect({ wallet })} style={{
-      background: 'none', border: '1px solid #C9A84C40',
-      color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-      fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
-    }}>
-      CONNECT SUI
-    </button>
-  );
-}
 
 const CHAINS = [
   { id: 'arbitrum', label: 'Arbitrum', short: 'ARB', desc: 'Robinhood Stocks' },
@@ -189,7 +144,11 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
             {balance !== null && (
               <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.05em' }}>${parseFloat(balance || 0).toFixed(2)} USDC</div>
             )}
-            {chain === 'sui' && <SuiWalletButton />}
+            {chain === 'sui' && (
+              <div style={{ fontSize: 9 }}>
+                <ConnectButton connectText="CONNECT SUI" />
+              </div>
+            )}
             <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
               <button onClick={() => setDropdownOpen(!dropdownOpen)} style={{
                 display: 'flex', alignItems: 'center', gap: 6,

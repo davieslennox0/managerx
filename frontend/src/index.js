@@ -1,4 +1,3 @@
-import { registerSlushWallet } from '@mysten/slush-wallet';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { PrivyProvider } from '@privy-io/react-auth';
@@ -8,9 +7,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getFullnodeUrl } from '@mysten/sui/client';
 import App from './App';
 
+import '@mysten/dapp-kit/dist/index.css';
 import './index.css';
 
-registerSlushWallet({ name: 'ManagerX' });
 const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
 const queryClient = new QueryClient();
 const suiNetworks = { mainnet: { url: getFullnodeUrl('mainnet') } };
@@ -19,7 +18,7 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <QueryClientProvider client={queryClient}>
     <SuiClientProvider networks={suiNetworks} defaultNetwork="mainnet">
-      <WalletProvider autoConnect={false}>
+      <WalletProvider autoConnect={false} slushWallet={{ name: 'ManagerX' }}>
         <PrivyProvider
           appId="cmpeku47e000l0ci6ejcg63m5"
           config={{
