@@ -31,6 +31,7 @@ export default function App() {
 
   useEffect(() => {
     if (!dynamicUser || !userWallets?.length) return;
+    const doSync = async () => {
 
     // Create Solana wallet if missing
     const hasSolana = userWallets.some(w => isSolanaWallet(w));
@@ -51,7 +52,7 @@ export default function App() {
     const email = dynamicUser.email || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId;
     const name = dynamicUser.firstName || dynamicUser.alias || email?.split('@')[0];
 
-    axios.post('/api/auth/sync', {
+    await axios.post('/api/auth/sync', {
       email,
       name,
       privyUserId: dynamicUser.userId,
@@ -65,6 +66,8 @@ export default function App() {
       setUser(data.user);
       if (isNew) setShowTour(true);
     }).catch(console.error);
+    };
+    doSync();
   }, [dynamicUser, userWallets]);
 
   const handleLogout = async () => {
