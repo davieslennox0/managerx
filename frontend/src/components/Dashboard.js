@@ -23,6 +23,7 @@ function SuiWalletButton() {
     );
   }
 
+  console.log('Available wallets:', wallets.map(w => w.name));
   const slush = wallets.find(w => w.name.toLowerCase().includes('slush'));
   const wallet = slush || wallets[0];
 

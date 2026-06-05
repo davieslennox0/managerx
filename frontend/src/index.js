@@ -1,3 +1,4 @@
+import { registerSlushWallet } from '@mysten/slush-wallet';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { PrivyProvider } from '@privy-io/react-auth';
@@ -6,10 +7,10 @@ import { SuiClientProvider, WalletProvider } from '@mysten/dapp-kit';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getFullnodeUrl } from '@mysten/sui/client';
 import App from './App';
-import { registerSlushWallet } from '@mysten/slush-wallet';
-registerSlushWallet({ name: 'ManagerX' });
+
 import './index.css';
 
+registerSlushWallet({ name: 'ManagerX' });
 const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
 const queryClient = new QueryClient();
 const suiNetworks = { mainnet: { url: getFullnodeUrl('mainnet') } };
