@@ -10,7 +10,7 @@ export default function App() {
   const { wallets: evmWallets } = useWallets();
   const { wallets: solWallets } = useSolanaWallets();
   const suiAccount = useCurrentAccount();
-  const exportWallet = () => alert('Export: check your Privy dashboard at privy.io');
+  const { exportWallet } = usePrivy();
   const [user, setUser] = useState(null);
   const [chain, setChain] = useState('arbitrum');
   const [loading, setLoading] = useState(true);
