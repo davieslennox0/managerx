@@ -31,8 +31,8 @@ root.render(
             loginMethods: ['google', 'email'],
             appearance: { theme: 'dark', accentColor: '#C9A84C' },
             embeddedWallets: {
-              ethereum: { createOnLogin: 'all-users' },
-              solana: { createOnLogin: 'all-users' },
+              createOnLogin: 'users-without-wallets',
+              noPromptOnSignature: true,
             },
             solanaClusters: [{ name: 'mainnet-beta', rpcUrl: 'https://api.mainnet-beta.solana.com' }],
             externalWallets: { solana: { connectors: solanaConnectors } },
