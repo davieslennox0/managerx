@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
+import { useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
+import { useWalletKit } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
@@ -7,24 +8,34 @@ import Portfolio from './Portfolio';
 // ── Sui Wallet Connect ────────────────────────────────────────────────────────
 function SuiConnectBtn() {
   const account = useCurrentAccount();
-  return (
-    <div style={{ fontSize: 9 }}>
-      <ConnectButton
-        connectText='CONNECT SUI'
-        style={{
-          background: 'none',
-          border: '1px solid #C9A84C50',
-          color: '#C9A84C',
-          padding: '5px 12px',
-          fontSize: 9,
-          letterSpacing: '0.1em',
-          fontFamily: 'Georgia, serif',
-          borderRadius: 4,
-          cursor: 'pointer',
-        }}
-      />
-    </div>
-  );
+  const { mutate: disconnect } = useDisconnectWallet();
+  const { wallets, connect } = useWalletKit();
+
+  const handleConnect = async () => {
+    const slush = wallets.find(w => w.name === 'Slush Wallet' || w.name === 'Slush');
+    const wallet = slush || wallets[0];
+    if (wallet) {
+      try { await connect({ wallet }); }
+      catch (e) { console.error('Connect failed', e); }
+    }
+  };
+
+  const btn = {
+    background: 'none', border: '1px solid #C9A84C50',
+    color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
+    fontSize: 9, letterSpacing: '0.1em',
+    fontFamily: 'Georgia, serif', borderRadius: 4,
+  };
+
+  if (account) {
+    return (
+      <button onClick={() => disconnect()} style={btn}>
+        {account.address.slice(0,6)}...{account.address.slice(-4)} ✓
+      </button>
+    );
+  }
+
+  return <button onClick={handleConnect} style={btn}>CONNECT SUI</button>;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────

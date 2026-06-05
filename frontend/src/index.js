@@ -6,6 +6,8 @@ import { createNetworkConfig, SuiClientProvider, WalletProvider } from '@mysten/
 import { getFullnodeUrl } from '@mysten/sui/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@mysten/dapp-kit/dist/index.css';
+import { registerSlushWallet } from '@mysten/slush-wallet';
+registerSlushWallet();
 import App from './App';
 import './index.css';
 
