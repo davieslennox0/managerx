@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
-import { useWalletKit } from '@mysten/dapp-kit';
+import { useCurrentAccount, useDisconnectWallet, useConnectWallet, useWallets } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
@@ -9,13 +8,14 @@ import Portfolio from './Portfolio';
 function SuiConnectBtn() {
   const account = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
-  const { wallets, connect } = useWalletKit();
+  const wallets = useWallets();
+  const { mutate: connect } = useConnectWallet();
 
   const handleConnect = async () => {
     const slush = wallets.find(w => w.name === 'Slush Wallet' || w.name === 'Slush');
     const wallet = slush || wallets[0];
     if (wallet) {
-      try { await connect({ wallet }); }
+      try { connect({ wallet }); }
       catch (e) { console.error('Connect failed', e); }
     }
   };
