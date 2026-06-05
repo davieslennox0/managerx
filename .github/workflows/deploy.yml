@@ -36,8 +36,9 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           source: "frontend/build/*"
-          target: "/root/manager-v2/frontend/"
+          target: "/root/manager-v2/frontend/build/"
           strip_components: 2
+          overwrite: true
 
       - name: Restart services
         uses: appleboy/ssh-action@master
@@ -49,4 +50,4 @@ jobs:
             chmod -R 755 /root/manager-v2/frontend/build
             systemctl restart caddy
             pm2 restart manager-backend
-            echo "Deploy complete"
+            echo "Deploy complete - $(date)"
