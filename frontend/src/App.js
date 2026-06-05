@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   useDynamicContext,
   DynamicWidget,
+  useEmbeddedWallet,
 } from '@dynamic-labs/sdk-react-core';
 import { isEthereumWallet } from '@dynamic-labs/ethereum';
 import { isSolanaWallet } from '@dynamic-labs/solana';
@@ -17,6 +18,7 @@ export default function App() {
     handleLogOut,
     setShowAuthFlow,
   } = useDynamicContext();
+  const { createEmbeddedWallet } = useEmbeddedWallet();
 
   const [user, setUser] = useState(() => {
     const stored = localStorage.getItem('managerx_user');
@@ -29,6 +31,12 @@ export default function App() {
 
   useEffect(() => {
     if (!dynamicUser || !userWallets?.length) return;
+
+    // Create Solana wallet if missing
+    const hasSolana = userWallets.some(w => isSolanaWallet(w));
+    if (!hasSolana && createEmbeddedWallet) {
+      try { await createEmbeddedWallet({ chain: 'SOL' }); } catch (e) { console.log('SOL wallet create:', e.message); }
+    }
 
     const evmWallet = userWallets.find(w => isEthereumWallet(w));
     const solWallet = userWallets.find(w => isSolanaWallet(w));
