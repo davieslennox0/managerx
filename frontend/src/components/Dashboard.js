@@ -98,7 +98,7 @@ function PriceTicker({ chain }) {
   );
 }
 
-export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, suiAccount }) {
+export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, suiAccount, onExportWallet }) {
   const [view, setView] = useState('chat');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState(null);
@@ -156,7 +156,8 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
           <div style={{ fontSize: 8, color: '#2A2A30', marginBottom: 10, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {(chain === 'sui' ? user.suiAddress : user.evmAddress)?.slice(0, 14)}…
           </div>
-          <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif' }}>SIGN OUT</button>
+          <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif', marginBottom: 4 }}>SIGN OUT</button>
+          <button onClick={onExportWallet} style={{ fontSize: 8, color: '#555', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif' }}>EXPORT KEY</button>
         </div>
       </div>
 

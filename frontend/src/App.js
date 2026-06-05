@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { usePrivy, useSolanaWallets, useWallets } from '@privy-io/react-auth';
+import { usePrivy, useSolanaWallets, useWallets, useExportWallet } from '@privy-io/react-auth';
 import { useCurrentAccount } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Onboarding from './components/Onboarding';
@@ -10,6 +10,7 @@ export default function App() {
   const { wallets: evmWallets } = useWallets();
   const { wallets: solWallets } = useSolanaWallets();
   const suiAccount = useCurrentAccount();
+  const { exportWallet } = useExportWallet();
   const [user, setUser] = useState(null);
   const [chain, setChain] = useState('arbitrum');
   const [loading, setLoading] = useState(true);
@@ -62,6 +63,6 @@ export default function App() {
   );
 
   return user
-    ? <Dashboard user={user} chain={chain} onChainChange={handleChainChange} onLogout={handleLogout} suiAccount={suiAccount} />
+    ? <Dashboard user={user} chain={chain} onChainChange={handleChainChange} onLogout={handleLogout} suiAccount={suiAccount} onExportWallet={exportWallet} />
     : <Onboarding />;
 }
