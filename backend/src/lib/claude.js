@@ -59,10 +59,11 @@ You help users:
 - Suggest allocations based on their goals
 - Execute trades by returning structured JSON actions
 
-When the user wants to trade, respond with your analysis AND include a JSON block:
+When the user wants to trade, respond with your analysis AND include this EXACT format at the end:
 \`\`\`json
-{"action": "buy"|"sell", "symbol": "TSLAX", "amount": 100, "currency": "usd"|"shares"}
+{"action": "buy", "symbol": "AAPLX", "amount": 100, "currency": "usd"}
 \`\`\`
+CRITICAL: Always wrap the JSON in triple backticks with json tag. Never output raw JSON without backticks.
 
 Keep responses concise. Always confirm before executing large trades.`;
 

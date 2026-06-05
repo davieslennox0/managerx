@@ -88,9 +88,17 @@ export default function Chat({ user, chain, onNewChat }) {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const parseAction = (text) => {
-    const match = text.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-    if (!match) return null;
-    try { return JSON.parse(match[1]); } catch { return null; }
+    // Try fenced code block first
+    const fenced = text.match(/```json\s*([\s\S]*?)```/);
+    if (fenced) {
+      try { return JSON.parse(fenced[1]); } catch {}
+    }
+    // Try raw JSON object
+    const raw = text.match(/\{[\s\S]*?"action"[\s\S]*?"symbol"[\s\S]*?\}/);
+    if (raw) {
+      try { return JSON.parse(raw[0]); } catch {}
+    }
+    return null;
   };
 
   const send = useCallback(async (text) => {
