@@ -9,7 +9,8 @@ function SuiConnectBtn() {
   const account = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
   const { mutate: connect } = useConnectWallet();
-  const wallets = useWallets();
+  const allWallets = useWallets();
+  const wallets = allWallets.filter(w => !w.name.toLowerCase().includes("leap") && !w.name.toLowerCase().includes("nightly"));
   const [showModal, setShowModal] = useState(false);
 
   const btn = {
@@ -57,7 +58,7 @@ function SuiConnectBtn() {
                 <div style={{ fontSize: 12, color: '#888', marginBottom: 20, lineHeight: 1.7 }}>
                   No Sui wallet detected. Get Slush — the easiest Sui wallet.
                 </div>
-                <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
+                <a href="https://my.slush.app" target="_blank" rel="noreferrer" style={{
                   display: 'block', padding: '12px', background: '#C9A84C',
                   color: '#0C0C10', borderRadius: 8, textAlign: 'center',
                   textDecoration: 'none', fontSize: 11, fontWeight: 700,
@@ -97,7 +98,7 @@ function SuiConnectBtn() {
                   </button>
                 ))}
                 <div style={{ marginTop: 8, textAlign: 'center' }}>
-                  <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
+                  <a href="https://my.slush.app" target="_blank" rel="noreferrer" style={{
                     fontSize: 9, color: '#444', textDecoration: 'none', letterSpacing: '0.1em',
                   }}>
                     Don't have Slush? Get it here ↗
