@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-  useDynamicContext,
-  DynamicWidget,
-  useEmbeddedWallet,
-} from '@dynamic-labs/sdk-react-core';
+import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
 import { isEthereumWallet } from '@dynamic-labs/ethereum';
 import { isSolanaWallet } from '@dynamic-labs/solana';
 import axios from 'axios';
@@ -11,63 +7,56 @@ import Dashboard from './components/Dashboard';
 import Onboarding from './components/Onboarding';
 
 export default function App() {
-  const {
-    user: dynamicUser,
-    primaryWallet,
-    userWallets,
-    handleLogOut,
-    setShowAuthFlow,
-  } = useDynamicContext();
-  const { createEmbeddedWallet } = useEmbeddedWallet();
+  const { user: dynamicUser, userWallets, handleLogOut } = useDynamicContext();
 
-  const [user, setUser] = useState(() => {
-    const stored = localStorage.getItem('managerx_user');
-    return stored ? JSON.parse(stored) : null;
-  });
-  const [chain, setChain] = useState(
-    () => localStorage.getItem('managerx_chain') || 'arbitrum'
-  );
+  const [user, setUser] = useState(null);
+  const [chain, setChain] = useState(() => localStorage.getItem('managerx_chain') || 'arbitrum');
   const [showTour, setShowTour] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
+  // Sync wallets to backend whenever Dynamic user or wallets change
   useEffect(() => {
-    if (!dynamicUser || !userWallets?.length) return;
-    const doSync = async () => {
-
-    // Create Solana wallet if missing
-    const hasSolana = userWallets.some(w => isSolanaWallet(w));
-    if (!hasSolana && createEmbeddedWallet) {
-      try { await createEmbeddedWallet({ chain: 'SOL' }); } catch (e) { console.log('SOL wallet create:', e.message); }
+    if (!dynamicUser) {
+      setUser(null);
+      return;
     }
 
-    console.log('All wallets:', JSON.stringify(userWallets.map(w => ({
-      address: w.address, chain: w.chain, network: w.network
-    }))));
-    const evmWallet = userWallets.find(w => isEthereumWallet(w));
-    const solWallet = userWallets.find(w => isSolanaWallet(w));
-    const suiWallet = userWallets.find(w => 
-      w.chain === 'SUI' || w.chain === 'sui' || 
-      w.network === 'sui' || w.address?.startsWith('0x') && w.chain !== 'evm'
+    const evmWallet = userWallets?.find(w => isEthereumWallet(w));
+    const solWallet = userWallets?.find(w => isSolanaWallet(w));
+    const suiWallet = userWallets?.find(w =>
+      !isEthereumWallet(w) && !isSolanaWallet(w)
     );
 
-    const email = dynamicUser.email || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId;
-    const name = dynamicUser.firstName || dynamicUser.alias || email?.split('@')[0];
+    console.log('Wallets:', { 
+      evm: evmWallet?.address, 
+      sol: solWallet?.address, 
+      sui: suiWallet?.address 
+    });
 
-    await axios.post('/api/auth/sync', {
+    const email = dynamicUser.email
+      || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId
+      || dynamicUser.verifiedCredentials?.[0]?.address;
+
+    if (!email) return;
+
+    setSyncing(true);
+    axios.post('/api/auth/sync', {
       email,
-      name,
+      name: dynamicUser.firstName || dynamicUser.alias || email.split('@')[0],
       privyUserId: dynamicUser.userId,
       evmAddress: evmWallet?.address || '',
       solAddress: solWallet?.address || '',
       suiAddress: suiWallet?.address || '',
     }).then(({ data }) => {
       const isNew = !localStorage.getItem('managerx_token');
-      localStorage.setItem('managerx_user', JSON.stringify(data.user));
       localStorage.setItem('managerx_token', data.token);
+      localStorage.setItem('managerx_user', JSON.stringify(data.user));
       setUser(data.user);
       if (isNew) setShowTour(true);
-    }).catch(console.error);
-    };
-    doSync();
+    }).catch(e => {
+      console.error('Sync failed:', e.message);
+    }).finally(() => setSyncing(false));
+
   }, [dynamicUser, userWallets]);
 
   const handleLogout = async () => {
@@ -83,21 +72,23 @@ export default function App() {
     localStorage.setItem('managerx_chain', c);
   };
 
-  // Show dashboard if Dynamic user exists, even before backend sync
-  if (!dynamicUser) {
-    return <Onboarding />;
-  }
+  // Not logged in
+  if (!dynamicUser) return <Onboarding />;
 
-  // Show loading while syncing
-  if (!user) {
-    return (
-      <div style={{ minHeight: '100vh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ color: '#C9A84C', fontFamily: 'Georgia, serif', fontSize: 12, letterSpacing: '0.2em' }}>
-          LOADING PORTFOLIO...
-        </div>
+  // Logged in but syncing
+  if (!user) return (
+    <div style={{
+      minHeight: '100vh', background: '#0C0C10',
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      fontFamily: 'Georgia, serif', gap: 16,
+    }}>
+      <div style={{ fontSize: 20, color: '#C9A84C', letterSpacing: '0.15em' }}>MANAGERX</div>
+      <div style={{ fontSize: 10, color: '#444', letterSpacing: '0.2em' }}>
+        {syncing ? 'SYNCING WALLETS...' : 'LOADING...'}
       </div>
-    );
-  }
+    </div>
+  );
 
   return (
     <Dashboard
