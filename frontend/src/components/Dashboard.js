@@ -6,6 +6,22 @@ import Portfolio from './Portfolio';
 
 // ── Sui Wallet Connect ────────────────────────────────────────────────────────
 function SuiConnectBtn() {
+  const connectSlushWeb = () => {
+    // Open Slush web app in popup - it registers itself via wallet standard
+    const popup = window.open(
+      'https://my.slush.app',
+      'slush_wallet',
+      'width=400,height=600,popup=yes'
+    );
+    // Poll for wallet registration
+    const interval = setInterval(() => {
+      if (popup?.closed) {
+        clearInterval(interval);
+        // Wallet should now be registered, trigger connect
+        window.dispatchEvent(new Event('wallet-registered'));
+      }
+    }, 500);
+  };
   const account = useCurrentAccount();
   const { mutate: disconnect } = useDisconnectWallet();
   const { mutate: connect } = useConnectWallet();
@@ -58,14 +74,14 @@ function SuiConnectBtn() {
                 <div style={{ fontSize: 12, color: '#888', marginBottom: 20, lineHeight: 1.7 }}>
                   Connect your Sui wallet to trade xStocks.
                 </div>
-                <a href="https://my.slush.app" target="_blank" rel="noreferrer" onClick={() => setShowModal(false)} style={{
-                  display: 'block', padding: '12px', background: '#C9A84C',
+                <button onClick={connectSlushWeb} style={{
+                  display: 'block', width: '100%', padding: '12px', background: '#C9A84C',
                   color: '#0C0C10', borderRadius: 8, textAlign: 'center',
-                  textDecoration: 'none', fontSize: 11, fontWeight: 700,
+                  border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer',
                   letterSpacing: '0.1em', marginBottom: 8,
                 }}>
-                  OPEN SLUSH WALLET ↗
-                </a>
+                  CONNECT WITH SLUSH ↗
+                </button>
                 <div style={{ fontSize: 9, color: '#444', textAlign: 'center', letterSpacing: '0.05em' }}>
                   Works on mobile · No seed phrases needed
                 </div>
