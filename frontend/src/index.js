@@ -7,7 +7,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getFullnodeUrl } from '@mysten/sui/client';
 import App from './App';
 
-import '@mysten/dapp-kit/dist/index.css';
 import './index.css';
 
 const solanaConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });

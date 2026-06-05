@@ -1,10 +1,50 @@
 import React, { useState, useEffect } from 'react';
-import { ConnectButton } from '@mysten/dapp-kit';
+import { useConnectWallet, useWallets, useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
 
 
+
+function SuiConnectBtn() {
+  const wallets = useWallets();
+  const account = useCurrentAccount();
+  const { mutate: connect } = useConnectWallet();
+  const { mutate: disconnect } = useDisconnectWallet();
+
+  if (account) {
+    return (
+      <button onClick={() => disconnect()} style={{
+        background: 'none', border: '1px solid #C9A84C50',
+        color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
+        fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
+      }}>
+        {account.address.slice(0,6)}...{account.address.slice(-4)} ✓
+      </button>
+    );
+  }
+
+  if (wallets.length === 0) {
+    return (
+      <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
+        background: 'none', border: '1px solid #C9A84C50',
+        color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
+        fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif',
+        borderRadius: 4, textDecoration: 'none', display: 'inline-block',
+      }}>GET SLUSH ↗</a>
+    );
+  }
+
+  return (
+    <button onClick={() => connect({ wallet: wallets[0] })} style={{
+      background: 'none', border: '1px solid #C9A84C50',
+      color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
+      fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
+    }}>
+      CONNECT SUI ({wallets.length})
+    </button>
+  );
+}
 
 const CHAINS = [
   { id: 'arbitrum', label: 'Arbitrum', short: 'ARB', desc: 'Robinhood Stocks' },
@@ -144,11 +184,7 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
             {balance !== null && (
               <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.05em' }}>${parseFloat(balance || 0).toFixed(2)} USDC</div>
             )}
-            {chain === 'sui' && (
-              <div style={{ fontSize: 9 }}>
-                <ConnectButton connectText="CONNECT SUI" />
-              </div>
-            )}
+            {chain === 'sui' && <SuiConnectBtn />}
             <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
               <button onClick={() => setDropdownOpen(!dropdownOpen)} style={{
                 display: 'flex', alignItems: 'center', gap: 6,
