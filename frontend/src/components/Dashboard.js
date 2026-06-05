@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useConnectWallet, useWallets, useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
+import { ConnectModal, useCurrentAccount, useDisconnectWallet } from '@mysten/dapp-kit';
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
@@ -7,10 +7,9 @@ import Portfolio from './Portfolio';
 
 
 function SuiConnectBtn() {
-  const wallets = useWallets();
   const account = useCurrentAccount();
-  const { mutate: connect } = useConnectWallet();
   const { mutate: disconnect } = useDisconnectWallet();
+  const [open, setOpen] = React.useState(false);
 
   if (account) {
     return (
@@ -24,29 +23,20 @@ function SuiConnectBtn() {
     );
   }
 
-  console.log('ALL wallets:', wallets.map(w => w.name));
-  if (wallets.length === 0) {
-    return (
-      <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
-        background: 'none', border: '1px solid #C9A84C50',
-        color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-        fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif',
-        borderRadius: 4, textDecoration: 'none', display: 'inline-block',
-      }}>GET SLUSH ↗</a>
-    );
-  }
-
   return (
-    <button onClick={() => {
-      console.log('Connecting to:', wallets[0]?.name);
-      connect({ wallet: wallets[0] });
-    }} style={{
-      background: 'none', border: '1px solid #C9A84C50',
-      color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-      fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
-    }}>
-      {wallets[0]?.name || 'CONNECT SUI'}
-    </button>
+    <ConnectModal
+      trigger={
+        <button style={{
+          background: 'none', border: '1px solid #C9A84C50',
+          color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
+          fontSize: 9, letterSpacing: '0.1em', fontFamily: 'Georgia, serif', borderRadius: 4,
+        }}>
+          CONNECT SUI
+        </button>
+      }
+      open={open}
+      onOpenChange={setOpen}
+    />
   );
 }
 
