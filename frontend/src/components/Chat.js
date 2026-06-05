@@ -132,7 +132,36 @@ export default function Chat({ user, chain, onNewChat }) {
       {pendingAction && (
         <ConfirmModal
           action={pendingAction}
-          onConfirm={() => { setPendingAction(null); send(`Confirmed — execute the ${pendingAction.action} of ${pendingAction.symbol}`); }}
+          onConfirm={async () => {
+            const action = pendingAction;
+            setPendingAction(null);
+            // Call trade execute endpoint directly
+            try {
+              const { data } = await axios.post('/api/trade/execute', {
+                chain,
+                action: {
+                  type: action.action,
+                  symbol: action.symbol,
+                  amount: action.amount,
+                  currency: action.currency || 'usd',
+                },
+              }, { headers: { Authorization: `Bearer ${token}` } });
+
+              const successMsg = {
+                role: 'assistant',
+                content: data.txHash
+                  ? `✅ Trade executed.\n\n**${action.action.toUpperCase()}** ${action.symbol}\n**Amount:** ${action.amount}\n**Tx:** ${data.txHash.slice(0, 10)}...${data.txHash.slice(-6)}\n\n[View on Arbiscan](https://arbiscan.io/tx/${data.txHash})`
+                  : `✅ ${data.message}`,
+              };
+              setMessages(prev => [...prev, successMsg]);
+            } catch (e) {
+              const errMsg = {
+                role: 'assistant',
+                content: `❌ Trade failed: ${e.response?.data?.error || e.message}`,
+              };
+              setMessages(prev => [...prev, errMsg]);
+            }
+          }}
           onCancel={() => setPendingAction(null)}
         />
       )}
