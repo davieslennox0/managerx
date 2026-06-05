@@ -5,6 +5,7 @@ const db = require('../db');
 const { chat } = require('../lib/claude');
 const { getArbPortfolio } = require('../lib/arbitrum');
 const { getSolPortfolio } = require('../lib/solana');
+const { getPrice } = require('./prices');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'managerx_secret';
@@ -50,6 +51,17 @@ router.post('/', async (req, res) => {
     } else if (chain === 'sui' && user.sui_address) {
       portfolio = await getSolPortfolio(user.sui_address, user.id).catch(() => ({}));
     }
+
+    // Fetch live prices for top assets
+    const topSymbols = chain === 'arbitrum'
+      ? ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'SPY']
+      : ['TSLA', 'AAPL', 'NVDA', 'SPY', 'META'];
+    const priceResults = await Promise.all(topSymbols.map(async s => {
+      const p = await getPrice(s).catch(() => null);
+      return p ? `${s}: ${p.price}` : null;
+    }));
+    const livePrices = priceResults.filter(Boolean).join(', ');
+    portfolio.livePrices = livePrices;
 
     const reply = await chat({ messages, chain, portfolio });
 
