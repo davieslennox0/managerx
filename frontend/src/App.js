@@ -66,8 +66,20 @@ export default function App() {
     localStorage.setItem('managerx_chain', c);
   };
 
-  if (!dynamicUser || !user) {
-    return <Onboarding onLogin={() => setShowAuthFlow(true)} />;
+  // Show dashboard if Dynamic user exists, even before backend sync
+  if (!dynamicUser) {
+    return <Onboarding />;
+  }
+
+  // Show loading while syncing
+  if (!user) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#0C0C10', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#C9A84C', fontFamily: 'Georgia, serif', fontSize: 12, letterSpacing: '0.2em' }}>
+          LOADING PORTFOLIO...
+        </div>
+      </div>
+    );
   }
 
   return (
