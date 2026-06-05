@@ -1,4 +1,4 @@
-const { Connection, PublicKey } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js');
 const axios = require('axios');
 
 const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -70,6 +70,12 @@ const XSTOCK_MINTS = {
   WMTx:   'Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci',
 };
 
+function getAgentKeypair() {
+  const key = process.env.AGENT_SOL_PRIVATE_KEY;
+  if (!key) throw new Error('AGENT_SOL_PRIVATE_KEY not set');
+  return Keypair.fromSecretKey(Buffer.from(key, 'base64'));
+}
+
 function getConnection() {
   return new Connection(
     process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
@@ -130,16 +136,30 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
 
   const quote = quoteRes.data;
 
+  const agentKeypair = getAgentKeypair();
+
   const swapRes = await axios.post('https://quote-api.jup.ag/v6/swap', {
     quoteResponse: quote,
-    userPublicKey: solAddress,
+    userPublicKey: agentKeypair.publicKey.toBase58(),
     wrapAndUnwrapSol: false,
   });
 
+  // Deserialize, sign and send
+  const connection = getConnection();
+  const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
+  const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+  transaction.sign([agentKeypair]);
+
+  const txid = await connection.sendRawTransaction(transaction.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+
+  await connection.confirmTransaction(txid, 'confirmed');
+
   return {
-    swapTransaction: swapRes.data.swapTransaction,
+    txHash: txid,
     outputAmount: quote.outAmount / 1e6,
-    quote,
   };
 }
 

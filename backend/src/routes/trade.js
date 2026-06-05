@@ -5,6 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade } = require('../lib/sui');
+const { jupiterSwap } = require('../lib/solana');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'managerx_secret';
@@ -46,17 +47,13 @@ router.post('/execute', async (req, res) => {
       if (chain === 'arbitrum' && user.evm_address) {
         const result = await executeArbTrade(user.evm_address, type, symbol, shares, priceCents);
         txHash = result.txHash;
-      } else if (chain === 'sui' && user.sui_address) {
-        // Get user portfolio object ID
-        const portfolioObj = db.prepare(
-          'SELECT sui_portfolio_id FROM users WHERE id = ?'
-        ).get(user.id);
-        if (!portfolioObj?.sui_portfolio_id) {
-          return res.status(400).json({ error: 'No Sui portfolio object. Deposit first to create one.' });
-        }
-        const result = await executeSuiTrade(
-          user.sui_address, portfolioObj.sui_portfolio_id,
-          type, symbol, shares, priceCents
+      } else if (chain === 'sui') {
+        // Agent executes on Jupiter (Solana) on behalf of user
+        const usdcAmount = currency === 'usd' ? amount : shares * price;
+        const result = await jupiterSwap(
+          process.env.AGENT_SOL_ADDRESS,
+          symbol,
+          usdcAmount
         );
         txHash = result.txHash;
       }
