@@ -24,6 +24,7 @@ function SuiConnectBtn() {
     );
   }
 
+  console.log('Detected wallets:', wallets.map(w => ({ name: w.name, id: w.id })));
   if (wallets.length === 0) {
     return (
       <a href="https://slush.app" target="_blank" rel="noreferrer" style={{
