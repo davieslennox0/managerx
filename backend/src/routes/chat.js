@@ -48,8 +48,10 @@ router.post('/', async (req, res) => {
     let portfolio = {};
     if (chain === 'arbitrum' && user.evm_address) {
       portfolio = await getArbPortfolio(user.evm_address, user.id).catch(() => ({}));
-    } else if (chain === 'sui' && user.sui_address) {
-      portfolio = await getSolPortfolio(user.sui_address, user.id).catch(() => ({}));
+    } else if (chain === 'sui') {
+      portfolio = await getSolPortfolio(user.sol_address || user.sui_address, user.id).catch(() => ({}));
+      portfolio.suiAddress = user.sui_address || 'Not connected';
+      portfolio.solAddress = user.sol_address || 'Not connected';
     }
 
     // Fetch live prices for top assets

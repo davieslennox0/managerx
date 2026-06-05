@@ -47,6 +47,22 @@ export default function App() {
     }).catch(console.error);
   }, [ready, authenticated, privyUser, evmWallets, solWallets, suiAccount]);
 
+  // Dedicated effect to sync Solana wallet when it becomes available
+  useEffect(() => {
+    if (!user) return;
+    const solWallet = solWallets.find(w => w.walletClientType === 'privy');
+    if (!solWallet?.address) return;
+    const token = localStorage.getItem('managerx_token');
+    axios.post('/api/auth/sync', {
+      email: user.email,
+      solAddress: solWallet.address,
+    }, { headers: { Authorization: `Bearer ${token}` } })
+    .then(({ data }) => {
+      localStorage.setItem('managerx_user', JSON.stringify(data.user));
+      setUser(data.user);
+    }).catch(() => {});
+  }, [solWallets, user?.email]);
+
   const handleChainChange = (c) => { setChain(c); localStorage.setItem('managerx_chain', c); };
   const handleLogout = () => {
     localStorage.removeItem('managerx_user');
