@@ -140,7 +140,7 @@ export default function Chat({ user, chain }) {
         });
 
         // User approves in Dynamic wallet popup
-        const result = await suiWallet.signAndExecuteTransaction({ transaction: tx });
+        const result = await suiWallet.signAndExecuteTransaction(tx);
         suiTxHash = result.digest;
         console.log('CCTP burn confirmed:', suiTxHash);
       }
