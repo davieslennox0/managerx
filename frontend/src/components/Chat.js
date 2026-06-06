@@ -140,15 +140,19 @@ export default function Chat({ user, chain }) {
           ],
         });
 
-        // Mirror WaasSuiWallet.sendBalance: connect, set activeAccountAddress on the
-        // connector (required before signAndExecuteTransaction), then sign+execute.
         const connector = suiWallet._connector;
         if (!connector) throw new Error('Sui wallet connector not found');
         await connector.connect();
-        // getWalletClientByAddress synchronously calls setActiveAccountAddress before
-        // its async body, so WaaS will have the account set when it signs.
+        // setActiveAccountAddress is called synchronously on the first tick of this
+        // async method, so the account is set before signTransaction runs.
         connector.getWalletClientByAddress({ accountAddress: suiAddress });
-        const result = await connector.signAndExecuteTransaction(tx);
+        // Use signTransaction + executeTransactionBlock directly so result.digest
+        // is from a plain async call, not returned via a generator return statement.
+        const signedTx = await connector.signTransaction(tx);
+        const result = await suiClient.executeTransactionBlock({
+          signature: signedTx.signature,
+          transactionBlock: signedTx.bytes,
+        });
         suiTxHash = result.digest;
         console.log('CCTP burn confirmed:', suiTxHash);
       }
