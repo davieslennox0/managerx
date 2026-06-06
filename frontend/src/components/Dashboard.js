@@ -1,10 +1,26 @@
 import React, { useState, useEffect } from 'react';
+import { useEmbeddedReveal } from '@dynamic-labs/sdk-react-core';
 
 import axios from 'axios';
 import Chat from './Chat';
 import Portfolio from './Portfolio';
 
 // ── Sui Wallet Connect ────────────────────────────────────────────────────────
+// ── Export Key ───────────────────────────────────────────────────────────────
+function ExportKeyBtn() {
+  const { initExportProcess } = useEmbeddedReveal();
+  return (
+    <button onClick={() => initExportProcess()} style={{
+      fontSize: 8, color: '#555', border: '1px solid #1C1C22',
+      background: 'none', cursor: 'pointer', padding: '5px 8px',
+      borderRadius: 4, width: '100%', letterSpacing: '0.1em',
+      fontFamily: 'Georgia, serif',
+    }}>
+      EXPORT KEY
+    </button>
+  );
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 const CHAINS = [
   { id: 'arbitrum', label: 'Arbitrum', short: 'ARB', desc: 'Robinhood Stocks' },
