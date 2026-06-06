@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
-import { useUserWallets } from '@dynamic-labs/sdk-react-core';
+import { useUserWallets, useDynamicContext } from '@dynamic-labs/sdk-react-core';
 import { isSuiWallet } from '@dynamic-labs/sui-core';
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
@@ -57,6 +57,7 @@ const parseAction = (text) => {
 
 export default function Chat({ user, chain }) {
   const userWallets = useUserWallets();
+  const { primaryWallet } = useDynamicContext();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -95,8 +96,13 @@ export default function Chat({ user, chain }) {
       let suiTxHash = null;
 
       if (chain === 'sui') {
-        const suiWallet = userWallets?.find(w => isSuiWallet(w));
-        if (!suiWallet) throw new Error('Sui wallet not connected');
+        // Try userWallets first, fall back to primaryWallet if it's Sui
+        let suiWallet = userWallets?.find(w => isSuiWallet(w));
+        if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) {
+          suiWallet = primaryWallet;
+        }
+        if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
+        console.log('Using Sui wallet:', suiWallet);
 
         const suiAddress = user.suiAddress;
         const amountMist = BigInt(Math.round(action.amount * 1e6));
