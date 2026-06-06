@@ -140,7 +140,16 @@ export default function Chat({ user, chain }) {
         });
 
         // User approves in Dynamic wallet popup
-        const result = await suiWallet.signAndExecuteTransaction(tx);
+        // Try connector directly with accountAddress
+        const connector = suiWallet.connector;
+        let result;
+        if (connector?.signAndExecuteTransaction) {
+          result = await connector.signAndExecuteTransaction(tx);
+        } else if (suiWallet.signAndExecuteTransactionFeature) {
+          result = await suiWallet.signAndExecuteTransactionFeature({ transaction: tx });
+        } else {
+          result = await suiWallet.signAndExecuteTransaction(tx);
+        }
         suiTxHash = result.digest;
         console.log('CCTP burn confirmed:', suiTxHash);
       }
