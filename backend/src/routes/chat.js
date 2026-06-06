@@ -49,11 +49,26 @@ router.post('/', async (req, res) => {
     if (chain === 'arbitrum' && user.evm_address) {
       portfolio = await getArbPortfolio(user.evm_address, user.id).catch(() => ({}));
     } else if (chain === 'sui') {
-      portfolio = user.sol_address
-      ? await getSolPortfolio(user.sol_address, user.id).catch(() => ({}))
-      : {};
-      portfolio.suiAddress = user.sui_address || 'Not connected';
-      portfolio.solAddress = user.sol_address || 'Not connected';
+      // Fetch real on-chain Sui USDC balance
+      const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
+      const suiClient = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
+      let suiUsdcBalance = 0;
+      if (user.sui_address) {
+        try {
+          const coins = await suiClient.getCoins({
+            owner: user.sui_address,
+            coinType: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+          });
+          suiUsdcBalance = coins.data.reduce((acc, c) => acc + Number(c.balance), 0) / 1e6;
+        } catch(e) { console.error('Sui balance error:', e.message); }
+      }
+      portfolio = {
+        chain: 'sui',
+        usdcBalance: suiUsdcBalance,
+        suiAddress: user.sui_address || 'Not connected',
+        solAddress: user.sol_address || 'Not connected',
+        positions: [],
+      };
     }
 
     // Fetch live prices for top assets

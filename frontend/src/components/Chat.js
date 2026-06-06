@@ -138,14 +138,16 @@ export default function Chat({ user, chain }) {
           ],
         });
 
-        // User approves in Dynamic wallet popup
-        // Try connector directly with accountAddress
+        // Set active account address before signing
         const connector = suiWallet.connector;
+        if (connector?.getWalletClientByAddress) {
+          await connector.getWalletClientByAddress({ accountAddress: suiAddress });
+        }
+
+        // User approves in Dynamic wallet popup
         let result;
         if (connector?.signAndExecuteTransaction) {
           result = await connector.signAndExecuteTransaction(tx);
-        } else if (suiWallet.signAndExecuteTransactionFeature) {
-          result = await suiWallet.signAndExecuteTransactionFeature({ transaction: tx });
         } else {
           result = await suiWallet.signAndExecuteTransaction(tx);
         }
