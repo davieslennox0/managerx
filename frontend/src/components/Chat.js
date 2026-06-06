@@ -138,19 +138,9 @@ export default function Chat({ user, chain }) {
           ],
         });
 
-        // Set active account address before signing
-        const connector = suiWallet.connector;
-        if (connector?.getWalletClientByAddress) {
-          await connector.getWalletClientByAddress({ accountAddress: suiAddress });
-        }
-
-        // User approves in Dynamic wallet popup
-        let result;
-        if (connector?.signAndExecuteTransaction) {
-          result = await connector.signAndExecuteTransaction(tx);
-        } else {
-          result = await suiWallet.signAndExecuteTransaction(tx);
-        }
+        // Sign directly with the wallet instance
+        tx.setSender(suiAddress);
+        const result = await suiWallet.signAndExecuteTransaction(tx);
         suiTxHash = result.digest;
         console.log('CCTP burn confirmed:', suiTxHash);
       }
