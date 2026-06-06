@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useUserWallets } from '@dynamic-labs/sdk-react-core';
 import { isSuiWallet } from '@dynamic-labs/sui-core';
+import { Transaction } from '@mysten/sui/transactions';
+import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 
 // ── Markdown renderer ──────────────────────────────────────────────────────
 function Markdown({ text }) {

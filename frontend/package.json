@@ -7,7 +7,7 @@
     "@dynamic-labs/sdk-react-core": "^4.88.1",
     "@dynamic-labs/solana": "^4.88.1",
     "@dynamic-labs/sui": "^4.88.1",
-    "@mysten/sui": "^1.0.0",
+    "@mysten/sui": "^1.45.2",
     "@solana/wallet-adapter-base": "^0.9.0",
     "@solana/web3.js": "^1.98.0",
     "@tanstack/react-query": "^5.0.0",
