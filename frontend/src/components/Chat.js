@@ -101,9 +101,11 @@ export default function Chat({ user, chain }) {
           suiWallet = primaryWallet;
         }
         if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
-        console.log('Using Sui wallet:', suiWallet);
 
-        const suiAddress = user.suiAddress;
+        // Use the wallet's own address as authoritative for both on-chain lookups and signing.
+        const suiAddress = suiWallet.address || user.suiAddress;
+        console.log('Using Sui wallet:', suiWallet, 'address:', suiAddress);
+
         const amountMist = BigInt(Math.round(action.amount * 1e6));
         const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
 
@@ -138,12 +140,14 @@ export default function Chat({ user, chain }) {
           ],
         });
 
-        // getWalletClientByAddress sets activeAccountAddress on the connector,
-        // which is required before signAndExecuteTransaction (WaaS enforces it).
+        // Mirror WaasSuiWallet.sendBalance: connect, set activeAccountAddress on the
+        // connector (required before signAndExecuteTransaction), then sign+execute.
         const connector = suiWallet._connector;
         if (!connector) throw new Error('Sui wallet connector not found');
         await connector.connect();
-        await connector.getWalletClientByAddress({ accountAddress: suiAddress });
+        // getWalletClientByAddress synchronously calls setActiveAccountAddress before
+        // its async body, so WaaS will have the account set when it signs.
+        connector.getWalletClientByAddress({ accountAddress: suiAddress });
         const result = await connector.signAndExecuteTransaction(tx);
         suiTxHash = result.digest;
         console.log('CCTP burn confirmed:', suiTxHash);
@@ -169,9 +173,11 @@ export default function Chat({ user, chain }) {
       setMessages(prev => [...prev, successMsg]);
 
     } catch (e) {
+      const rootMsg = e.cause?.cause?.message || e.cause?.message || e.response?.data?.error || e.message;
+      console.error('Trade error:', e, 'cause:', e.cause);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `❌ Trade failed: ${e.response?.data?.error || e.message}`,
+        content: `❌ Trade failed: ${rootMsg}`,
       }]);
     }
   };
