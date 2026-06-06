@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import { useUserWallets, useDynamicContext } from '@dynamic-labs/sdk-react-core';
-import { isSuiWallet } from '@dynamic-labs/sui-core';
+import { isSuiWallet } from '@dynamic-labs/sui';
 import { Transaction } from '@mysten/sui/transactions';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 
