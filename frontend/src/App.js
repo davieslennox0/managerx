@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useDynamicContext } from '@dynamic-labs/sdk-react-core';
+import { useDynamicContext, useUserWallets } from '@dynamic-labs/sdk-react-core';
 import { isEthereumWallet } from '@dynamic-labs/ethereum';
 import { isSolanaWallet } from '@dynamic-labs/solana';
 import axios from 'axios';
@@ -7,39 +7,27 @@ import Dashboard from './components/Dashboard';
 import Onboarding from './components/Onboarding';
 
 export default function App() {
-  const { user: dynamicUser, userWallets, handleLogOut } = useDynamicContext();
+  const { user: dynamicUser, handleLogOut } = useDynamicContext();
+  const userWallets = useUserWallets();
 
   const [user, setUser] = useState(null);
   const [chain, setChain] = useState(() => localStorage.getItem('managerx_chain') || 'arbitrum');
   const [showTour, setShowTour] = useState(false);
-  const [syncing, setSyncing] = useState(false);
 
-  // Sync wallets to backend whenever Dynamic user or wallets change
   useEffect(() => {
-    if (!dynamicUser) {
-      setUser(null);
-      return;
-    }
+    if (!dynamicUser) { setUser(null); return; }
+
+    console.log('userWallets:', userWallets?.map(w => ({ address: w.address, chain: w.chain })));
 
     const evmWallet = userWallets?.find(w => isEthereumWallet(w));
     const solWallet = userWallets?.find(w => isSolanaWallet(w));
-    const suiWallet = userWallets?.find(w =>
-      !isEthereumWallet(w) && !isSolanaWallet(w)
-    );
-
-    console.log('Wallets:', { 
-      evm: evmWallet?.address, 
-      sol: solWallet?.address, 
-      sui: suiWallet?.address 
-    });
+    const suiWallet = userWallets?.find(w => !isEthereumWallet(w) && !isSolanaWallet(w));
 
     const email = dynamicUser.email
-      || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId
-      || dynamicUser.verifiedCredentials?.[0]?.address;
+      || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId;
 
     if (!email) return;
 
-    setSyncing(true);
     axios.post('/api/auth/sync', {
       email,
       name: dynamicUser.firstName || dynamicUser.alias || email.split('@')[0],
@@ -53,9 +41,7 @@ export default function App() {
       localStorage.setItem('managerx_user', JSON.stringify(data.user));
       setUser(data.user);
       if (isNew) setShowTour(true);
-    }).catch(e => {
-      console.error('Sync failed:', e.message);
-    }).finally(() => setSyncing(false));
+    }).catch(e => console.error('Sync failed:', e.message));
 
   }, [dynamicUser, userWallets]);
 
@@ -67,15 +53,8 @@ export default function App() {
     setUser(null);
   };
 
-  const handleChainChange = (c) => {
-    setChain(c);
-    localStorage.setItem('managerx_chain', c);
-  };
-
-  // Not logged in
   if (!dynamicUser) return <Onboarding />;
 
-  // Logged in but syncing
   if (!user) return (
     <div style={{
       minHeight: '100vh', background: '#0C0C10',
@@ -84,9 +63,7 @@ export default function App() {
       fontFamily: 'Georgia, serif', gap: 16,
     }}>
       <div style={{ fontSize: 20, color: '#C9A84C', letterSpacing: '0.15em' }}>MANAGERX</div>
-      <div style={{ fontSize: 10, color: '#444', letterSpacing: '0.2em' }}>
-        {syncing ? 'SYNCING WALLETS...' : 'LOADING...'}
-      </div>
+      <div style={{ fontSize: 10, color: '#444', letterSpacing: '0.2em' }}>SYNCING WALLETS...</div>
     </div>
   );
 
@@ -94,7 +71,7 @@ export default function App() {
     <Dashboard
       user={user}
       chain={chain}
-      onChainChange={handleChainChange}
+      onChainChange={(c) => { setChain(c); localStorage.setItem('managerx_chain', c); }}
       onLogout={handleLogout}
       showTour={showTour}
       onTourDone={() => setShowTour(false)}
