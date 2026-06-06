@@ -17,14 +17,13 @@ const CCTP = {
   AGENT_ATA: '6fnbQ8eaU5WhJEqD9LgzWigZ7nLcJdVMmAvvLSL3FvgP',
 };
 
-function base58Decode(str) {
+function base58ToHex(str) {
   const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   let result = BigInt(0);
   for (const c of str) result = result * 58n + BigInt(ALPHABET.indexOf(c));
-  const bytes = [];
-  while (result > 0n) { bytes.unshift(Number(result % 256n)); result /= 256n; }
-  while (bytes.length < 32) bytes.unshift(0);
-  return bytes;
+  let hex = result.toString(16);
+  while (hex.length < 64) hex = '0' + hex;
+  return '0x' + hex;
 }
 
 function ConfirmModal({ action, onConfirm, onCancel }) {
@@ -106,7 +105,7 @@ export default function Chat({ user, chain }) {
 
         const suiAddress = user.suiAddress;
         const amountMist = BigInt(Math.round(action.amount * 1e6));
-        const mintRecipientBytes = base58Decode(CCTP.AGENT_ATA);
+        const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
 
         const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
         const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
@@ -131,7 +130,7 @@ export default function Chat({ user, chain }) {
           arguments: [
             coinArg,
             tx.pure.u32(CCTP.SOLANA_DOMAIN),
-            tx.pure.vector('u8', mintRecipientBytes),
+            tx.pure.address(mintRecipientHex),
             tx.object(CCTP.TOKEN_MESSENGER_STATE),
             tx.object(CCTP.MESSAGE_TRANSMITTER_STATE),
             tx.object(CCTP.DENY_LIST),
