@@ -138,9 +138,13 @@ export default function Chat({ user, chain }) {
           ],
         });
 
-        // Sign directly with the wallet instance
-        tx.setSender(suiAddress);
-        const result = await suiWallet.signAndExecuteTransaction(tx);
+        // getWalletClientByAddress sets activeAccountAddress on the connector,
+        // which is required before signAndExecuteTransaction (WaaS enforces it).
+        const connector = suiWallet._connector;
+        if (!connector) throw new Error('Sui wallet connector not found');
+        await connector.connect();
+        await connector.getWalletClientByAddress({ accountAddress: suiAddress });
+        const result = await connector.signAndExecuteTransaction(tx);
         suiTxHash = result.digest;
         console.log('CCTP burn confirmed:', suiTxHash);
       }
