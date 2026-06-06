@@ -50,3 +50,21 @@ db.exec(`
 `);
 
 module.exports = db;
+
+// Create bridge_transactions table for recovery
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bridge_transactions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    status TEXT DEFAULT 'burn_pending',
+    sui_tx_hash TEXT,
+    message_hash TEXT,
+    attestation TEXT,
+    sol_mint_tx TEXT,
+    jupiter_tx TEXT,
+    amount REAL,
+    symbol TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);

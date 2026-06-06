@@ -98,18 +98,24 @@ async function getSolPortfolio(solAddress, userId) {
       acc + (a.account.data.parsed.info.tokenAmount.uiAmount || 0), 0
     );
 
-    // Get xStock positions
+    // Get ALL token accounts in one call instead of 60 separate calls
     const positions = [];
-    for (const [symbol, mint] of Object.entries(XSTOCK_MINTS)) {
-      try {
-        const accounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
-          mint: new PublicKey(mint),
-        });
-        const balance = accounts.value.reduce((acc, a) =>
-          acc + (a.account.data.parsed.info.tokenAmount.uiAmount || 0), 0
-        );
-        if (balance > 0) positions.push({ symbol, shares: balance, mint });
-      } catch {}
+    try {
+      const allAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
+        programId: new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'),
+      });
+      const mintToSymbol = Object.fromEntries(
+        Object.entries(XSTOCK_MINTS).map(([sym, mint]) => [mint, sym])
+      );
+      for (const account of allAccounts.value) {
+        const info = account.account.data.parsed.info;
+        const symbol = mintToSymbol[info.mint];
+        if (symbol && info.tokenAmount.uiAmount > 0) {
+          positions.push({ symbol, shares: info.tokenAmount.uiAmount, mint: info.mint });
+        }
+      }
+    } catch (e) {
+      console.error('Token fetch error:', e.message);
     }
 
     return { chain: 'sui', address: solAddress, usdcBalance, positions };

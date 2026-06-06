@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { useUserWallets } from '@dynamic-labs/sdk-react-core';
+import { isSuiWallet } from '@dynamic-labs/sui-core';
 
 // ── Markdown renderer ──────────────────────────────────────────────────────
 function Markdown({ text }) {
