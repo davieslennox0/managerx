@@ -133,7 +133,7 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
 
   const amountLamports = Math.round(usdcAmount * 1e6);
 
-  const quoteRes = await axios.get('https://quote-api.jup.ag/v6/quote', {
+  const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
     params: {
       inputMint: USDC_SOL,
       outputMint: mint,
@@ -146,7 +146,7 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
 
   const agentKeypair = getAgentKeypair();
 
-  const swapRes = await axios.post('https://quote-api.jup.ag/v6/swap', {
+  const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
     quoteResponse: quote,
     userPublicKey: agentKeypair.publicKey.toBase58(),
     wrapAndUnwrapSol: false,
@@ -176,9 +176,11 @@ async function getXStockPrice(symbol) {
   const mint = XSTOCK_MINTS[canonical];
   if (!mint) return null;
   try {
-    const res = await axios.get(`https://price.jup.ag/v6/price?ids=${mint}&vsToken=${USDC_SOL}`);
-    const price = res.data.data[mint]?.price;
-    return price ? { price: price.toFixed(2), symbol } : null;
+    const res = await axios.get('https://api.jup.ag/swap/v1/quote', {
+      params: { inputMint: mint, outputMint: USDC_SOL, amount: 1_000_000, slippageBps: 50 },
+    });
+    const outAmount = parseFloat(res.data.outAmount);
+    return outAmount > 0 ? { price: (outAmount / 1e6).toFixed(2), symbol: canonical } : null;
   } catch { return null; }
 }
 
