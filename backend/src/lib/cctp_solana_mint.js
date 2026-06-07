@@ -52,6 +52,13 @@ function findLocalTokenPDA(mint) {
   )[0];
 }
 
+function findRemoteTokenMessengerPDA(domain) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('remote_token_messenger'), Buffer.from(domain.toString())],
+    TOKEN_MESSENGER_MINTER_PROGRAM_ID
+  )[0];
+}
+
 function findTokenPairPDA(remoteDomain, remoteToken) {
   const remoteTokenBuf = Buffer.from(remoteToken.replace('0x', ''), 'hex');
   return PublicKey.findProgramAddressSync(
@@ -61,10 +68,13 @@ function findTokenPairPDA(remoteDomain, remoteToken) {
 }
 
 function findUsedNoncePDA(nonce, sourceDomain) {
-  const nonceBuf = Buffer.alloc(8);
-  nonceBuf.writeBigUInt64LE(BigInt(nonce));
+  // Circle CCTP V1 Solana: seeds are ASCII strings, nonces grouped in buckets of 6400.
+  // first_nonce = ((nonce - 1) / MAX_NONCES) * MAX_NONCES + 1  (1-indexed buckets)
+  const MAX_NONCES = 6400n;
+  const n = BigInt(nonce);
+  const firstNonce = ((n - 1n) / MAX_NONCES) * MAX_NONCES + 1n;
   return PublicKey.findProgramAddressSync(
-    [Buffer.from('used_nonces'), Buffer.from(sourceDomain.toString()), nonceBuf],
+    [Buffer.from('used_nonces'), Buffer.from(sourceDomain.toString()), Buffer.from(firstNonce.toString())],
     MESSAGE_TRANSMITTER_PROGRAM_ID
   )[0];
 }
@@ -73,6 +83,14 @@ function findCustodyTokenAccountPDA(mint) {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('custody'), mint.toBuffer()],
     TOKEN_MESSENGER_MINTER_PROGRAM_ID
+  )[0];
+}
+
+// authority_pda owned by MessageTransmitter, seeds = ["message_transmitter_authority", receiver]
+function findAuthorityPda() {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('message_transmitter_authority'), TOKEN_MESSENGER_MINTER_PROGRAM_ID.toBuffer()],
+    MESSAGE_TRANSMITTER_PROGRAM_ID
   )[0];
 }
 
@@ -97,15 +115,17 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
 
   // PDAs
   const messageTransmitterPDA = findMessageTransmitterPDA();
+  const authorityPDA = findAuthorityPda();
   const tokenMessengerPDA = findTokenMessengerPDA();
+  const remoteTokenMessengerPDA = findRemoteTokenMessengerPDA(sourceDomain);
   const tokenMinterPDA = findTokenMinterPDA();
   const localTokenPDA = findLocalTokenPDA(USDC_MINT);
   const custodyTokenPDA = findCustodyTokenAccountPDA(USDC_MINT);
   const usedNoncePDA = findUsedNoncePDA(nonce, sourceDomain);
 
-  // Remote token (Sui USDC type as bytes32)
-  const SUI_USDC_HEX = 'dba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7';
-  const tokenPairPDA = findTokenPairPDA(sourceDomain, SUI_USDC_HEX);
+  // Extract burn_token from message body (CCTP header=116 bytes, body version=4 bytes, then 32-byte burn_token)
+  const burnToken = messageBytes.slice(120, 152).toString('hex');
+  const tokenPairPDA = findTokenPairPDA(sourceDomain, burnToken);
 
   // Recipient token account
   const recipientTokenAccount = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
@@ -154,7 +174,7 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
       .accounts({
         payer: agentKeypair.publicKey,
         caller: agentKeypair.publicKey,
-        authorityPda: tokenMessengerPDA,
+        authorityPda: authorityPDA,
         messageTransmitter: messageTransmitterPDA,
         usedNonces: usedNoncePDA,
         receiver: TOKEN_MESSENGER_MINTER_PROGRAM_ID,
@@ -167,6 +187,7 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
       })
       .remainingAccounts([
         { pubkey: tokenMessengerPDA, isWritable: false, isSigner: false },
+        { pubkey: remoteTokenMessengerPDA, isWritable: false, isSigner: false },
         { pubkey: tokenMinterPDA, isWritable: true, isSigner: false },
         { pubkey: localTokenPDA, isWritable: true, isSigner: false },
         { pubkey: tokenPairPDA, isWritable: false, isSigner: false },

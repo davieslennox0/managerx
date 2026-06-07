@@ -24,7 +24,7 @@ router.post('/execute', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { chain, action } = req.body;
+  const { chain, action, suiTxHash } = req.body;
   if (!chain || !action) return res.status(400).json({ error: 'Missing params' });
 
   const { type, symbol, amount, currency } = action;
@@ -68,7 +68,16 @@ router.post('/execute', async (req, res) => {
 
         const messageEvent = txData.events?.find(e => e.type.includes('MessageSent'));
         if (!messageEvent) throw new Error('No MessageSent event in burn tx');
-        const messageHash = messageEvent.parsedJson?.message || messageEvent.parsedJson?.message_hash;
+        
+        // message is a byte array - need to hash it for Circle's Iris API
+        const { ethers } = require('ethers');
+        const messageBytes = messageEvent.parsedJson?.message;
+        if (!messageBytes) throw new Error('No message bytes in MessageSent event');
+        
+        const messageHex = '0x' + Buffer.from(messageBytes).toString('hex');
+        const messageHash = ethers.keccak256(messageHex);
+        console.log('Message hex:', messageHex.slice(0, 20) + '...');
+        console.log('Message hash:', messageHash);
 
         // Step 2: Poll Circle attestation
         console.log('Step 2: Polling attestation...');
@@ -76,7 +85,7 @@ router.post('/execute', async (req, res) => {
 
         // Step 3: Mint USDC on Solana
         console.log('Step 3: Minting on Solana...');
-        await receiveMessageOnSolana(messageHash, attestation);
+        await receiveMessageOnSolana(messageHex, attestation);
 
         // Step 4: Swap on Jupiter
         console.log('Step 4: Swapping on Jupiter...');
