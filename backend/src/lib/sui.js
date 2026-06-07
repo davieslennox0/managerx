@@ -7,7 +7,7 @@ const MANAGER_STATE = process.env.SUI_MANAGER_STATE;
 const ADMIN_CAP = process.env.SUI_ADMIN_CAP;
 
 function getClient() {
-  return new SuiClient({ url: getFullnodeUrl('mainnet') });
+  return new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
 }
 
 function getAgentKeypair() {

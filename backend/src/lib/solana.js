@@ -1,5 +1,6 @@
 const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js');
 const axios = require('axios');
+const bs58 = require('bs58');
 
 const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
@@ -84,7 +85,7 @@ function getConnection() {
 }
 
 async function getSolPortfolio(solAddress, userId) {
-  if (!solAddress) return { chain: 'sui', usdcBalance: 0, positions: [] };
+  if (!solAddress) return { chain: 'solana', usdcBalance: 0, positions: [] };
 
   try {
     const connection = getConnection();
@@ -118,10 +119,10 @@ async function getSolPortfolio(solAddress, userId) {
       console.error('Token fetch error:', e.message);
     }
 
-    return { chain: 'sui', address: solAddress, usdcBalance, positions };
+    return { chain: 'solana', address: solAddress, usdcBalance, positions };
   } catch (e) {
     console.error('SOL portfolio error:', e.message);
-    return { chain: 'sui', usdcBalance: 0, positions: [] };
+    return { chain: 'solana', usdcBalance: 0, positions: [] };
   }
 }
 
