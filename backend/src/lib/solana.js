@@ -248,7 +248,8 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
 async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmount) {
   const {
     getAssociatedTokenAddressSync,
-    createTransferInstruction,
+    createTransferCheckedInstruction,
+    getMint,
     TOKEN_2022_PROGRAM_ID,
   } = require('@solana/spl-token');
 
@@ -257,14 +258,20 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
   const mint = new PublicKey(mintAddress);
   const userPubkey = new PublicKey(userSolAddress);
 
-  const userATA  = getAssociatedTokenAddressSync(mint, userPubkey,           false, TOKEN_2022_PROGRAM_ID);
+  const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  const decimals = mintInfo.decimals;
+
+  const userATA  = getAssociatedTokenAddressSync(mint, userPubkey,            false, TOKEN_2022_PROGRAM_ID);
   const agentATA = getAssociatedTokenAddressSync(mint, agentKeypair.publicKey, false, TOKEN_2022_PROGRAM_ID);
 
-  const transferIx = createTransferInstruction(
+  // Token-2022 extensions (transfer fees etc.) require transfer_checked, not transfer
+  const transferIx = createTransferCheckedInstruction(
     userATA,
+    mint,
     agentATA,
     userPubkey,
     BigInt(rawAmount),
+    decimals,
     [],
     TOKEN_2022_PROGRAM_ID
   );
@@ -278,8 +285,9 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
 async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
   const {
     getOrCreateAssociatedTokenAccount,
-    createTransferInstruction,
+    createTransferCheckedInstruction,
     getAssociatedTokenAddressSync,
+    getMint,
     TOKEN_2022_PROGRAM_ID,
   } = require('@solana/spl-token');
 
@@ -309,6 +317,10 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
   // Transfer the full actual balance — all tokens in the agent ATA belong to this user.
   const amountToTransfer = actualRaw;
 
+  // Fetch decimals — required by transfer_checked (Token-2022 mandate)
+  const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  const decimals = mintInfo.decimals;
+
   // Create user's ATA if it doesn't exist yet; agent pays the rent
   const userATA = await getOrCreateAssociatedTokenAccount(
     connection,
@@ -321,11 +333,14 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
     TOKEN_2022_PROGRAM_ID
   );
 
-  const transferIx = createTransferInstruction(
+  // Token-2022 extensions require transfer_checked (not bare transfer)
+  const transferIx = createTransferCheckedInstruction(
     agentATA,
+    mint,
     userATA.address,
     agentKeypair.publicKey,
     amountToTransfer,
+    decimals,
     [],
     TOKEN_2022_PROGRAM_ID
   );
