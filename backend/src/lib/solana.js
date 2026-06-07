@@ -1,4 +1,4 @@
-const { Connection, PublicKey, Keypair, VersionedTransaction } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction } = require('@solana/web3.js');
 const axios = require('axios');
 const bs58 = require('bs58');
 
@@ -169,6 +169,8 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
   return {
     txHash: txid,
     outputAmount: quote.outAmount / 1e6,
+    mintAddress: mint,
+    rawOutputAmount: Number(quote.outAmount),
   };
 }
 
@@ -185,4 +187,57 @@ async function getXStockPrice(symbol) {
   } catch { return null; }
 }
 
-module.exports = { getSolPortfolio, jupiterSwap, getXStockPrice, XSTOCK_MINTS };
+async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
+  const {
+    getOrCreateAssociatedTokenAccount,
+    createTransferInstruction,
+    getAssociatedTokenAddressSync,
+    TOKEN_2022_PROGRAM_ID,
+  } = require('@solana/spl-token');
+
+  const connection = getConnection();
+  const agentKeypair = getAgentKeypair();
+  const mint = new PublicKey(mintAddress);
+  const userPubkey = new PublicKey(userSolAddress);
+
+  // Agent's ATA is guaranteed to exist (tokens just landed here from the swap)
+  const agentATA = getAssociatedTokenAddressSync(
+    mint,
+    agentKeypair.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  // Create user's ATA if it doesn't exist yet; agent pays the rent
+  const userATA = await getOrCreateAssociatedTokenAccount(
+    connection,
+    agentKeypair,
+    mint,
+    userPubkey,
+    false,
+    'confirmed',
+    undefined,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  const transferIx = createTransferInstruction(
+    agentATA,
+    userATA.address,
+    agentKeypair.publicKey,
+    BigInt(rawAmount),
+    [],
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  const tx = new Transaction().add(transferIx);
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = agentKeypair.publicKey;
+
+  const txid = await connection.sendTransaction(tx, [agentKeypair], { maxRetries: 3 });
+  await connection.confirmTransaction(txid, 'confirmed');
+
+  return txid;
+}
+
+module.exports = { getSolPortfolio, jupiterSwap, getXStockPrice, XSTOCK_MINTS, transferXStockToUser };

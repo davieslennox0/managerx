@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade } = require('../lib/sui');
-const { jupiterSwap } = require('../lib/solana');
+const { jupiterSwap, transferXStockToUser } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana } = require('../lib/cctp');
 
 const router = express.Router();
@@ -92,6 +92,16 @@ router.post('/execute', async (req, res) => {
         const swap = await jupiterSwap(process.env.AGENT_SOL_ADDRESS, symbol, usdcAmount);
         txHash = swap.txHash;
         console.log('Swap complete:', txHash);
+
+        // Step 5: Transfer xStock tokens from agent wallet to user's Solana address
+        const userSolAddress = db.prepare('SELECT sol_address FROM users WHERE id = ?').get(user.id)?.sol_address;
+        if (userSolAddress) {
+          console.log('Step 5: Transferring xStock to user:', userSolAddress);
+          const transferTx = await transferXStockToUser(swap.mintAddress, userSolAddress, swap.rawOutputAmount);
+          console.log('Transfer complete:', transferTx);
+        } else {
+          console.warn('Step 5: No sol_address for user', user.id, '— tokens remain in agent wallet');
+        }
       }
     } else {
       txHash = '0x' + [...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
