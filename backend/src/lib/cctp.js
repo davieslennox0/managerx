@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { ethers } = require('ethers');
 const { receiveMessageOnSolana } = require('./cctp_solana_mint');
 const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
@@ -27,7 +28,7 @@ const USDC_SUI_TYPE = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb84
 const IRIS_API = 'https://iris-api.circle.com/v1/attestations';
 
 function getSuiClient() {
-  return new SuiClient({ url: getFullnodeUrl('mainnet') });
+  return new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
 }
 
 function getAgentKeypair() {
@@ -36,35 +37,32 @@ function getAgentKeypair() {
   return Ed25519Keypair.fromSecretKey(key);
 }
 
-// Convert Solana address to bytes32 format for Sui
+// Convert a Solana base58 address to a 32-byte array for use as CCTP mintRecipient.
+// Pass the destination token account (ATA), not the wallet address.
 function solanaAddressToBytes32(solanaAddress) {
   const { PublicKey } = require('@solana/web3.js');
-  // Use USDC token account, not wallet address
-  const ata = process.env.AGENT_SOL_USDC_ATA || solanaAddress;
-  const pubkey = new PublicKey(ata);
-  const bytes = pubkey.toBytes();
-  return Array.from(bytes); // Already 32 bytes for Solana pubkeys
+  return Array.from(new PublicKey(solanaAddress).toBytes());
 }
 
 // Poll Circle attestation API
-async function pollAttestation(messageHash, maxWait = 120000) {
+async function pollAttestation(messageHash, maxWait = 300_000) {
   const start = Date.now();
   console.log('Polling attestation for:', messageHash);
 
   while (Date.now() - start < maxWait) {
     try {
-      const res = await axios.get(`${IRIS_API}/${messageHash}`);
-      if (res.data?.status === 'complete') {
+      const res = await axios.get(`${IRIS_API}/${messageHash}`, { timeout: 10_000 });
+      if (res.data?.status === 'complete' && res.data?.attestation) {
         console.log('Attestation complete');
         return res.data.attestation;
       }
       console.log('Attestation status:', res.data?.status || 'pending');
     } catch (e) {
-      console.log('Polling...', e.response?.status || e.message);
+      if (e.response?.status !== 404) console.log('Polling error:', e.response?.status || e.message);
     }
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise(r => setTimeout(r, 8_000));
   }
-  throw new Error('Attestation timed out');
+  throw new Error('Attestation timed out after ' + maxWait / 1000 + 's');
 }
 
 // Bridge USDC from user's Sui wallet to Solana destination
@@ -124,19 +122,24 @@ async function bridgeUsdcSuiToSolana(userSuiAddress, amountUsdc, solanaDestinati
 
   console.log('Burn tx:', result.digest);
 
-  // Extract message hash from events
+  // The Sui MessageSent event carries the raw 248-byte CCTP message as a u8 array.
+  // There is no message_hash field — compute keccak256 ourselves for Iris polling.
   const messageEvent = result.events?.find(e => e.type.includes('MessageSent'));
-  if (!messageEvent) throw new Error('No MessageSent event found');
+  if (!messageEvent) throw new Error('No MessageSent event found in Sui burn tx');
 
-  const messageHash = messageEvent.parsedJson?.message_hash
-    || messageEvent.parsedJson?.hash;
+  const rawBytes = messageEvent.parsedJson?.message;
+  if (!Array.isArray(rawBytes) || rawBytes.length === 0) {
+    throw new Error('MessageSent event missing message bytes');
+  }
+  const messageHex  = '0x' + Buffer.from(rawBytes).toString('hex');
+  const messageHash = ethers.keccak256(messageHex);
 
   // Wait for Circle attestation
   const attestation = await pollAttestation(messageHash);
 
-  // Mint USDC on Solana
+  // receiveMessageOnSolana needs the full 248-byte message hex, not the hash.
   console.log('Step 3: Minting USDC on Solana...');
-  const mintResult = await receiveMessageOnSolana(messageHash, attestation);
+  const mintResult = await receiveMessageOnSolana(messageHex, attestation);
   console.log('USDC minted:', mintResult.txHash);
 
   return {
@@ -157,39 +160,3 @@ module.exports = {
   USDC_SUI_TYPE,
 };
 
-// Mint USDC on Solana after attestation (complete the bridge)
-async function mintUsdcOnSolana(message, attestation) {
-  const { Connection, PublicKey, Keypair, Transaction } = require('@solana/web3.js');
-  const anchor = require('@project-serum/anchor');
-  const bs58 = require('bs58');
-
-  const connection = new Connection(
-    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    'confirmed'
-  );
-
-  const privateKeyB58 = process.env.AGENT_SOL_PRIVATE_KEY;
-  const secretKey = bs58.default.decode(privateKeyB58);
-  const agentKeypair = Keypair.fromSecretKey(secretKey);
-
-  // CCTP V1 Solana program IDs
-  const MESSAGE_TRANSMITTER = new PublicKey('CCTPmbSD7gX1bxKPAmg77w8oFzNFpaQiQUWD43TKaecd');
-  const TOKEN_MESSENGER = new PublicKey('CCTPiPYPc6AsJuwueEnWgSgucamXDZwBd53dQ11YiKX3');
-
-  // Convert message and attestation to buffers
-  const messageBytes = Buffer.from(message.replace('0x', ''), 'hex');
-  const attestationBytes = Buffer.from(attestation.replace('0x', ''), 'hex');
-
-  console.log('Minting USDC on Solana...');
-
-  // For now log the data - full Anchor integration needed
-  console.log('Message length:', messageBytes.length);
-  console.log('Attestation length:', attestationBytes.length);
-  console.log('Agent:', agentKeypair.publicKey.toBase58());
-  console.log('USDC ATA:', process.env.AGENT_SOL_USDC_ATA);
-
-  // TODO: Full Anchor program call to receiveMessage
-  return { status: 'mint_pending', message, attestation };
-}
-
-module.exports.mintUsdcOnSolana = mintUsdcOnSolana;
