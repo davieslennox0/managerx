@@ -4,9 +4,10 @@ const { v4: uuid } = require('uuid');
 const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
-const { executeSuiTrade } = require('../lib/sui');
-const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, transferXStockToUser, XSTOCK_MINTS } = require('../lib/solana');
+const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
+const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, transferXStockToUser, estimateGasCostUsdc, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
+const { storeTradeReceipt } = require('../lib/walrus');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'managerx_secret';
@@ -19,6 +20,25 @@ function authUser(req) {
     return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
   } catch { return null; }
 }
+
+// Wrap a gasless Sui transaction kind with agent gas sponsorship.
+// Frontend builds with onlyTransactionKind:true, sends bytes here, gets back
+// the full sponsored tx + agent signature to countersign and submit.
+router.post('/sponsor-sui-tx', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { txKindBytes, senderAddress } = req.body;
+  if (!txKindBytes || !senderAddress) return res.status(400).json({ error: 'Missing txKindBytes or senderAddress' });
+
+  try {
+    const result = await sponsorSuiTransaction(txKindBytes, senderAddress);
+    res.json(result);
+  } catch (e) {
+    console.error('Sponsor tx error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Build the unsigned Solana xStock→agent transfer transaction for the user to sign.
 // Frontend signs + submits it, then passes solTxHash to /execute for the sell.
@@ -100,9 +120,16 @@ router.post('/execute', async (req, res) => {
           txHash = swapResult.txHash;
           console.log('Swap complete:', txHash, '→', swapResult.usdcAmount, 'USDC');
 
+          // Deduct gas for swap tx + bridge burn tx from the USDC output before bridging.
+          const sellGasCostUsdc = await estimateGasCostUsdc(2);
+          const sellGasCostRaw  = Math.round(sellGasCostUsdc * 1e6);
+          const bridgeRaw = Math.max(swapResult.rawUsdcAmount - sellGasCostRaw, 0);
+          if (bridgeRaw <= 0) throw new Error(`Sell proceeds too small to cover gas fees (~$${sellGasCostUsdc.toFixed(4)})`);
+          console.log(`Sell gas deduction: $${sellGasCostUsdc.toFixed(4)} → bridging ${(bridgeRaw/1e6).toFixed(6)} USDC`);
+
           // Step 2: Bridge USDC Solana → Sui (burn on Solana, attest, mint on Sui)
           console.log('Sell Step 2: Bridging USDC Solana → Sui for', userSuiAddress);
-          const bridge = await bridgeUsdcSolanaToSui(swapResult.rawUsdcAmount, userSuiAddress);
+          const bridge = await bridgeUsdcSolanaToSui(bridgeRaw, userSuiAddress);
           console.log('Bridge complete. Sui mint tx:', bridge.suiMintTxHash);
 
         } else {
@@ -196,6 +223,19 @@ router.post('/execute', async (req, res) => {
     // Record transaction
     db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(uuid(), user.id, chain, type, symbol, shares, price, total, txHash);
+
+    // Store immutable trade receipt on Walrus (non-blocking — don't await)
+    storeTradeReceipt({
+      userId: user.id,
+      chain,
+      type,
+      symbol,
+      shares,
+      price,
+      total,
+      txHash,
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
 
     res.json({
       success: true,

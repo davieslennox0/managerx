@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import {
   DynamicContextProvider,
 } from '@dynamic-labs/sdk-react-core';
-import { EthereumWalletConnectors } from '@dynamic-labs/ethereum';
 import { SolanaWalletConnectors } from '@dynamic-labs/solana';
 import { SuiWalletConnectors } from '@dynamic-labs/sui';
 import App from './App';
@@ -15,7 +14,6 @@ root.render(
     settings={{
       environmentId: 'a2aa0b6a-4786-47f1-8758-ed3d968d05c7',
       walletConnectors: [
-        EthereumWalletConnectors,
         SolanaWalletConnectors,
         SuiWalletConnectors,
       ],

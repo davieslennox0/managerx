@@ -100,4 +100,35 @@ async function executeSuiTrade(userAddress, portfolioObjectId, type, symbol, sha
   return { txHash: result.digest };
 }
 
-module.exports = { getSuiPortfolio, executeSuiTrade };
+// Build a sponsored version of a gasless Sui transaction.
+// Frontend sends `onlyTransactionKind` bytes; agent wraps with its gas coin and signs.
+// Returns { txBytes (base64), agentSignature } for the frontend to countersign and submit.
+async function sponsorSuiTransaction(txKindBase64, senderAddress) {
+  const client    = getClient();
+  const keypair   = getAgentKeypair();
+  const agentAddr = keypair.getPublicKey().toSuiAddress();
+
+  // Rebuild as a full Transaction with the sender set
+  const txKindBytes = Buffer.from(txKindBase64, 'base64');
+  const tx = Transaction.fromKind(txKindBytes);
+  tx.setSender(senderAddress);
+  tx.setGasOwner(agentAddr);
+
+  // Pick the agent's highest-balance SUI coin as gas payment
+  const { data: coins } = await client.getCoins({ owner: agentAddr, coinType: '0x2::sui::SUI' });
+  if (!coins.length) throw new Error('Agent wallet has no SUI for gas sponsorship');
+  const gasCoin = coins.sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance)))[0];
+
+  tx.setGasPayment([{ objectId: gasCoin.coinObjectId, version: gasCoin.version, digest: gasCoin.digest }]);
+  tx.setGasBudget(10_000_000); // 0.01 SUI — covers a CCTP depositForBurn comfortably
+
+  const txBytes = await tx.build({ client });
+  const { signature: agentSignature } = await keypair.signTransaction(txBytes);
+
+  return {
+    txBytes:        Buffer.from(txBytes).toString('base64'),
+    agentSignature,
+  };
+}
+
+module.exports = { getSuiPortfolio, executeSuiTrade, sponsorSuiTransaction };

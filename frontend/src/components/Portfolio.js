@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-function DepositModal({ user, chain, onClose }) {
-  const address = chain === 'sui' ? user.suiAddress : user.evmAddress;
+function DepositModal({ user, onClose }) {
+  const address = user.suiAddress;
   const [copied, setCopied] = useState(false);
   const copy = () => { navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   return (
@@ -10,7 +10,7 @@ function DepositModal({ user, chain, onClose }) {
       <div style={{ background: '#12121A', border: '1px solid #C9A84C30', borderRadius: 14, padding: '32px', maxWidth: 380, width: '90%' }}>
         <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.2em', marginBottom: 20 }}>DEPOSIT FUNDS</div>
         <div style={{ fontSize: 12, color: '#888', marginBottom: 12, lineHeight: 1.6 }}>
-          Send USDC to your {chain === 'sui' ? 'Sui' : 'Arbitrum'} wallet address below. Your balance will update automatically.
+          Send USDC to your Sui wallet address below. Your balance will update automatically.
         </div>
         <div style={{ background: '#0C0C10', border: '1px solid #1C1C22', borderRadius: 8, padding: '14px', marginBottom: 16 }}>
           <div style={{ fontSize: 10, color: '#3A3A40', letterSpacing: '0.15em', marginBottom: 6 }}>WALLET ADDRESS</div>
@@ -47,7 +47,7 @@ export default function Portfolio({ user, chain }) {
     }).catch(console.error).finally(() => setLoading(false));
   }, [chain]);
 
-  const address = chain === 'sui' ? user.suiAddress : user.evmAddress;
+  const address = user.suiAddress;
 
   const getPnL = (position) => {
     const sym = position.symbol.replace('X', '').replace('x', '');
@@ -74,7 +74,7 @@ export default function Portfolio({ user, chain }) {
 
   return (
     <div style={{ overflowY: 'auto', background: '#0C0C10', flex: 1, fontFamily: 'Georgia, serif' }}>
-      {showDeposit && <DepositModal user={user} chain={chain} onClose={() => setShowDeposit(false)} />}
+      {showDeposit && <DepositModal user={user} onClose={() => setShowDeposit(false)} />}
 
       <div style={{ padding: '24px 28px' }}>
         {/* Top cards */}

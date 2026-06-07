@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useDynamicContext, useUserWallets } from '@dynamic-labs/sdk-react-core';
-import { isEthereumWallet } from '@dynamic-labs/ethereum';
 import { isSolanaWallet } from '@dynamic-labs/solana';
+import { isSuiWallet } from '@dynamic-labs/sui';
 import axios from 'axios';
 import Dashboard from './components/Dashboard';
 import Onboarding from './components/Onboarding';
@@ -11,7 +11,7 @@ export default function App() {
   const userWallets = useUserWallets();
 
   const [user, setUser] = useState(null);
-  const [chain, setChain] = useState(() => localStorage.getItem('managerx_chain') || 'arbitrum');
+  const [chain] = useState('sui');
   const [showTour, setShowTour] = useState(false);
 
   useEffect(() => {
@@ -19,9 +19,8 @@ export default function App() {
 
     console.log('userWallets:', userWallets?.map(w => ({ address: w.address, chain: w.chain })));
 
-    const evmWallet = userWallets?.find(w => isEthereumWallet(w));
     const solWallet = userWallets?.find(w => isSolanaWallet(w));
-    const suiWallet = userWallets?.find(w => !isEthereumWallet(w) && !isSolanaWallet(w));
+    const suiWallet = userWallets?.find(w => isSuiWallet(w));
 
     const email = dynamicUser.email
       || dynamicUser.verifiedCredentials?.find(c => c.oauthProvider === 'google')?.oauthAccountId;
@@ -32,7 +31,6 @@ export default function App() {
       email,
       name: dynamicUser.firstName || dynamicUser.alias || email.split('@')[0],
       privyUserId: dynamicUser.userId,
-      evmAddress: evmWallet?.address || '',
       solAddress: solWallet?.address || '',
       suiAddress: suiWallet?.address || '',
     }).then(({ data }) => {
@@ -71,7 +69,6 @@ export default function App() {
     <Dashboard
       user={user}
       chain={chain}
-      onChainChange={(c) => { setChain(c); localStorage.setItem('managerx_chain', c); }}
       onLogout={handleLogout}
       showTour={showTour}
       onTourDone={() => setShowTour(false)}

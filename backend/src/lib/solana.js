@@ -84,6 +84,23 @@ function getConnection() {
   );
 }
 
+// Returns estimated gas cost in USDC for N Solana transactions.
+// Uses Jupiter price API for live SOL price; falls back to $150 if unavailable.
+async function estimateGasCostUsdc(numTxs = 1) {
+  const LAMPORTS_PER_TX = 25_000; // conservative estimate incl. priority fee
+  try {
+    const res = await axios.get('https://api.jup.ag/price/v2', {
+      params: { ids: 'So11111111111111111111111111111111111111112' },
+      timeout: 3000,
+    });
+    const solPrice = parseFloat(res.data?.data?.['So11111111111111111111111111111111111111112']?.price || 0);
+    if (solPrice > 0) {
+      return (LAMPORTS_PER_TX * numTxs / 1e9) * solPrice;
+    }
+  } catch {}
+  return (LAMPORTS_PER_TX * numTxs / 1e9) * 150; // fallback at $150/SOL
+}
+
 async function getSolPortfolio(solAddress, userId) {
   if (!solAddress) return { chain: 'solana', usdcBalance: 0, positions: [] };
 
@@ -132,7 +149,13 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
   const mint = XSTOCK_MINTS[canonical];
   if (!mint) throw new Error(`Unknown xStock: ${symbol}`);
 
-  const amountLamports = Math.round(usdcAmount * 1e6);
+  // Deduct estimated gas (swap tx + xStock transfer tx) from USDC before quoting.
+  const gasCostUsdc = await estimateGasCostUsdc(2);
+  const effectiveUsdc = Math.max(usdcAmount - gasCostUsdc, 0);
+  if (effectiveUsdc <= 0) throw new Error(`Trade amount too small to cover gas fees (~$${gasCostUsdc.toFixed(4)})`);
+  console.log(`Gas deduction: $${gasCostUsdc.toFixed(4)} USDC → trading $${effectiveUsdc.toFixed(6)} of $${usdcAmount}`);
+
+  const amountLamports = Math.round(effectiveUsdc * 1e6);
 
   const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
     params: {
@@ -196,6 +219,7 @@ async function getXStockPrice(symbol) {
 }
 
 // Swap xStock → USDC via Jupiter (sell direction). Returns USDC amounts.
+// gasCostUsdc is passed in so the caller can deduct it from the bridged USDC output.
 async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
   const agentKeypair = getAgentKeypair();
 
@@ -362,6 +386,7 @@ module.exports = {
   jupiterSwapXStockToUsdc,
   buildSellTransferTransaction,
   transferXStockToUser,
+  estimateGasCostUsdc,
   getXStockPrice,
   XSTOCK_MINTS,
 };

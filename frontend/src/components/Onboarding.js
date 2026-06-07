@@ -16,12 +16,12 @@ export default function Onboarding() {
           AI PORTFOLIO AGENT
         </div>
         <div style={{ fontSize: 13, color: '#555', marginBottom: 32, lineHeight: 1.8 }}>
-          Trade tokenized stocks on Arbitrum and Sui.<br />
+          Trade tokenized xStocks on Sui.<br />
           Powered by AI. Non-custodial.
         </div>
         <DynamicWidget />
         <div style={{ fontSize: 9, color: '#222', marginTop: 24, letterSpacing: '0.1em' }}>
-          EVM · SOLANA · SUI · ALL IN ONE
+          SOLANA · SUI · POWERED BY AI
         </div>
       </div>
     </div>

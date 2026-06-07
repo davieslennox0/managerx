@@ -128,7 +128,7 @@ export default function Chat({ user, chain }) {
           execUserSuiAddress = suiAddress;
 
         } else {
-          // ── BUY: user burns USDC on Sui, backend bridges+swaps+delivers xStock ──
+          // ── BUY: user burns USDC on Sui, agent sponsors gas ──────────────────
           let suiWallet = userWallets?.find(w => isSuiWallet(w));
           if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) suiWallet = primaryWallet;
           if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
@@ -146,16 +146,14 @@ export default function Chat({ user, chain }) {
           const coin = coins.data.find(c => BigInt(c.balance) >= amountMist);
           if (!coin) throw new Error('Insufficient USDC balance');
 
+          // Step 1: Build the tx kind only (no gas — agent will sponsor)
           const tx = new Transaction();
-          tx.setSender(suiAddress);
-
           let coinArg;
           if (BigInt(coin.balance) === amountMist) {
             coinArg = tx.object(coin.coinObjectId);
           } else {
             [coinArg] = tx.splitCoins(tx.object(coin.coinObjectId), [amountMist]);
           }
-
           tx.moveCall({
             target: `${CCTP.TOKEN_MESSENGER_MINTER}::deposit_for_burn::deposit_for_burn`,
             typeArguments: [CCTP.USDC_TYPE],
@@ -169,18 +167,31 @@ export default function Chat({ user, chain }) {
               tx.object(CCTP.USDC_TREASURY),
             ],
           });
+          const txKindBytes = Buffer.from(
+            await tx.build({ client: suiClient, onlyTransactionKind: true })
+          ).toString('base64');
 
+          // Step 2: Backend wraps with agent gas + signs
+          const { data: sponsored } = await axios.post('/api/trade/sponsor-sui-tx', {
+            txKindBytes,
+            senderAddress: suiAddress,
+          }, { headers: { Authorization: `Bearer ${token}` } });
+
+          // Step 3: User signs the sponsored tx bytes
+          const sponsoredTxBytes = Uint8Array.from(atob(sponsored.txBytes), c => c.charCodeAt(0));
           const connector = suiWallet._connector;
           if (!connector) throw new Error('Sui wallet connector not found');
           await connector.connect();
-          connector.getWalletClientByAddress({ accountAddress: suiAddress });
-          const signedTx = await connector.signTransaction(tx);
+          const sponsoredTx = Transaction.from(sponsoredTxBytes);
+          const signedTx = await connector.signTransaction(sponsoredTx);
+
+          // Step 4: Submit with both signatures (user + agent)
           const result = await suiClient.executeTransactionBlock({
-            signature: signedTx.signature,
             transactionBlock: signedTx.bytes,
+            signature: [signedTx.signature, sponsored.agentSignature],
           });
           suiTxHash = result.digest;
-          console.log('CCTP burn confirmed:', suiTxHash);
+          console.log('CCTP burn confirmed (sponsored):', suiTxHash);
         }
       }
 

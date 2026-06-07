@@ -22,14 +22,8 @@ function ExportKeyBtn() {
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const CHAINS = [
-  { id: 'arbitrum', label: 'Arbitrum', short: 'ARB', desc: 'Robinhood Stocks' },
-  { id: 'sui',      label: 'Sui',      short: 'SUI', desc: 'xStocks' },
-];
-
 const TOUR_STEPS = [
-  { title: 'Welcome to ManagerX', body: 'Your AI-powered portfolio agent for tokenized stocks. Trade Robinhood stocks on Arbitrum or xStocks on Sui.' },
-  { title: 'Switch Networks', body: 'Use the dropdown in the top right to switch between Arbitrum (Robinhood stocks) and Sui (xStocks via CCTP).' },
+  { title: 'Welcome to ManagerX', body: 'Your AI-powered portfolio agent for tokenized xStocks on Sui.' },
   { title: 'Fund Your Wallet', body: 'Go to Portfolio → click your wallet address → copy it and send USDC to start trading.' },
   { title: 'Start Trading', body: 'Just chat naturally. Say "Buy $100 of NVDAx" or "What\'s TSLA trading at?" — your AI agent handles the rest.' },
 ];
@@ -85,11 +79,9 @@ function PriceTicker({ chain }) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
-export default function Dashboard({ user, chain, onChainChange, onLogout, showTour, onTourDone, userWallets }) {
+export default function Dashboard({ user, chain, onLogout, showTour, onTourDone, userWallets }) {
   const [view, setView] = useState('chat');
-  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [balance, setBalance] = useState(null);
-  const activeChain = CHAINS.find(c => c.id === chain) || CHAINS[0];
   const token = localStorage.getItem('managerx_token');
 
   const greeting = () => {
@@ -107,8 +99,7 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
 
 
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Georgia, serif', background: '#0C0C10', color: '#E8DCC8' }}
-      onClick={() => setDropdownOpen(false)}>
+    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Georgia, serif', background: '#0C0C10', color: '#E8DCC8' }}>
 
       {showTour && <Tour onDone={onTourDone} />}
 
@@ -142,10 +133,7 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
           <div style={{ fontSize: 7, color: '#2A2A30', letterSpacing: '0.25em', marginBottom: 6 }}>CLIENT</div>
           <div style={{ fontSize: 11, color: '#777', marginBottom: 2 }}>{user.name || user.email?.split('@')[0]}</div>
           <div style={{ fontSize: 8, color: '#2A2A30', marginBottom: 10, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {chain === 'sui'
-              ? (user.suiAddress?.slice(0, 14) || 'No wallet')
-              : user.evmAddress?.slice(0, 14)
-            }…
+            {user.suiAddress?.slice(0, 14) || 'No wallet'}…
           </div>
           <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif', marginBottom: 4 }}>SIGN OUT</button>
           
@@ -172,26 +160,8 @@ export default function Dashboard({ user, chain, onChainChange, onLogout, showTo
                 ${parseFloat(balance || 0).toFixed(2)} USDC
               </div>
             )}
-            
-            <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
-              <button onClick={() => setDropdownOpen(!dropdownOpen)} style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                background: 'none', border: '1px solid #C9A84C30',
-                color: '#C9A84C', padding: '5px 12px', cursor: 'pointer',
-                fontSize: 9, letterSpacing: '0.15em', fontFamily: 'Georgia, serif', borderRadius: 4,
-              }}>
-                {activeChain.label.toUpperCase()} <span style={{ fontSize: 6 }}>▼</span>
-              </button>
-              {dropdownOpen && (
-                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: '#12121A', border: '1px solid #C9A84C20', borderRadius: 6, zIndex: 100, minWidth: 150, boxShadow: '0 8px 32px #00000080' }}>
-                  {CHAINS.map(c => (
-                    <div key={c.id} onClick={() => { onChainChange(c.id); setDropdownOpen(false); }} style={{ padding: '10px 14px', cursor: 'pointer', background: c.id === chain ? '#1A1A24' : 'transparent', borderBottom: '1px solid #1C1C22' }}>
-                      <div style={{ fontSize: 9, color: c.id === chain ? '#C9A84C' : '#777', letterSpacing: '0.12em' }}>{c.label.toUpperCase()}</div>
-                      <div style={{ fontSize: 8, color: '#2A2A30', marginTop: 2 }}>{c.desc}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div style={{ fontSize: 9, color: '#C9A84C', border: '1px solid #C9A84C30', padding: '5px 12px', borderRadius: 4, letterSpacing: '0.15em' }}>
+              SUI
             </div>
           </div>
         </div>
