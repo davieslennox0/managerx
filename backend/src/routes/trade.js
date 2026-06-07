@@ -5,8 +5,8 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade } = require('../lib/sui');
-const { jupiterSwap, transferXStockToUser } = require('../lib/solana');
-const { bridgeUsdcSuiToSolana } = require('../lib/cctp');
+const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, transferXStockToUser, XSTOCK_MINTS } = require('../lib/solana');
+const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'managerx_secret';
@@ -20,11 +20,43 @@ function authUser(req) {
   } catch { return null; }
 }
 
+// Build the unsigned Solana xStock→agent transfer transaction for the user to sign.
+// Frontend signs + submits it, then passes solTxHash to /execute for the sell.
+router.post('/build-sell-transfer', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user.sol_address) return res.status(400).json({ error: 'No Solana address on account' });
+
+  const { symbol, amount, currency } = req.body;
+  if (!symbol || !amount) return res.status(400).json({ error: 'Missing params' });
+
+  try {
+    const sym = symbol.replace('X', '').replace('x', '').toUpperCase();
+    const priceData = await getPrice(sym);
+    const price = parseFloat(priceData?.price || 0);
+    if (!price) return res.status(400).json({ error: `No price data for ${symbol}` });
+
+    const shares = currency === 'usd' ? amount / price : amount;
+    const canonical = symbol.replace(/x$/i, '').toUpperCase() + 'x';
+    const mintAddress = XSTOCK_MINTS[canonical];
+    if (!mintAddress) return res.status(400).json({ error: `Unknown xStock: ${symbol}` });
+
+    // xStock tokens use 6 decimals (consistent with Jupiter's outAmount / 1e6 convention)
+    const rawAmount = Math.round(shares * 1e6);
+    const transaction = await buildSellTransferTransaction(mintAddress, user.sol_address, rawAmount);
+
+    res.json({ transaction, mintAddress, rawAmount, shares });
+  } catch (e) {
+    console.error('Build sell transfer error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/execute', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { chain, action, suiTxHash } = req.body;
+  const { chain, action, suiTxHash, solTxHash, userSuiAddress } = req.body;
   if (!chain || !action) return res.status(400).json({ error: 'Missing params' });
 
   const { type, symbol, amount, currency } = action;
@@ -49,58 +81,83 @@ router.post('/execute', async (req, res) => {
         const result = await executeArbTrade(user.evm_address, type, symbol, shares, priceCents);
         txHash = result.txHash;
       } else if (chain === 'sui') {
-        const usdcAmount = currency === 'usd' ? amount : shares * price;
+        if (type === 'sell') {
+          // ── Sell: xStock (Solana) → USDC (Sui) ───────────────────────────────
+          // The frontend has already transferred the user's xStock to the agent
+          // wallet and submitted solTxHash. We swap and bridge back to Sui.
+          if (!solTxHash)      return res.status(400).json({ error: 'Missing Solana transfer transaction (solTxHash)' });
+          if (!userSuiAddress) return res.status(400).json({ error: 'Missing userSuiAddress' });
 
-        if (!suiTxHash) return res.status(400).json({ error: 'Missing Sui burn transaction' });
+          const canonical  = symbol.replace(/x$/i, '').toUpperCase() + 'x';
+          const mintAddress = XSTOCK_MINTS[canonical];
+          if (!mintAddress) throw new Error(`Unknown xStock: ${symbol}`);
 
-        // Step 1: Get attestation for the user-signed burn tx
-        console.log('Step 1: Getting attestation for burn tx:', suiTxHash);
-        const { pollAttestation } = require('../lib/cctp');
-        const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
+          const rawAmount = Math.round(shares * 1e6);
 
-        // Get message hash from Sui tx events
-        const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
-        const client = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
-        const txData = await client.getTransactionBlock({
-          digest: suiTxHash,
-          options: { showEvents: true },
-        });
+          // Step 1: Swap xStock → USDC via Jupiter (agent wallet)
+          console.log('Sell Step 1: Jupiter xStock → USDC');
+          const swapResult = await jupiterSwapXStockToUsdc(mintAddress, rawAmount);
+          txHash = swapResult.txHash;
+          console.log('Swap complete:', txHash, '→', swapResult.usdcAmount, 'USDC');
 
-        const messageEvent = txData.events?.find(e => e.type.includes('MessageSent'));
-        if (!messageEvent) throw new Error('No MessageSent event in burn tx');
-        
-        // message is a byte array - need to hash it for Circle's Iris API
-        const { ethers } = require('ethers');
-        const messageBytes = messageEvent.parsedJson?.message;
-        if (!messageBytes) throw new Error('No message bytes in MessageSent event');
-        
-        const messageHex = '0x' + Buffer.from(messageBytes).toString('hex');
-        const messageHash = ethers.keccak256(messageHex);
-        console.log('Message hex:', messageHex.slice(0, 20) + '...');
-        console.log('Message hash:', messageHash);
+          // Step 2: Bridge USDC Solana → Sui (burn on Solana, attest, mint on Sui)
+          console.log('Sell Step 2: Bridging USDC Solana → Sui for', userSuiAddress);
+          const bridge = await bridgeUsdcSolanaToSui(swapResult.rawUsdcAmount, userSuiAddress);
+          console.log('Bridge complete. Sui mint tx:', bridge.suiMintTxHash);
 
-        // Step 2: Poll Circle attestation
-        console.log('Step 2: Polling attestation...');
-        const attestation = await pollAttestation(messageHash);
-
-        // Step 3: Mint USDC on Solana
-        console.log('Step 3: Minting on Solana...');
-        await receiveMessageOnSolana(messageHex, attestation);
-
-        // Step 4: Swap on Jupiter
-        console.log('Step 4: Swapping on Jupiter...');
-        const swap = await jupiterSwap(process.env.AGENT_SOL_ADDRESS, symbol, usdcAmount);
-        txHash = swap.txHash;
-        console.log('Swap complete:', txHash);
-
-        // Step 5: Transfer xStock tokens from agent wallet to user's Solana address
-        const userSolAddress = db.prepare('SELECT sol_address FROM users WHERE id = ?').get(user.id)?.sol_address;
-        if (userSolAddress) {
-          console.log('Step 5: Transferring xStock to user:', userSolAddress);
-          const transferTx = await transferXStockToUser(swap.mintAddress, userSolAddress, swap.rawOutputAmount);
-          console.log('Transfer complete:', transferTx);
         } else {
-          console.warn('Step 5: No sol_address for user', user.id, '— tokens remain in agent wallet');
+          // ── Buy: USDC (Sui) → xStock (Solana) ────────────────────────────────
+          const usdcAmount = currency === 'usd' ? amount : shares * price;
+
+          if (!suiTxHash) return res.status(400).json({ error: 'Missing Sui burn transaction' });
+
+          // Step 1: Get attestation for the user-signed burn tx
+          console.log('Step 1: Getting attestation for burn tx:', suiTxHash);
+          const { pollAttestation } = require('../lib/cctp');
+          const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
+
+          const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
+          const client = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
+          const txData = await client.getTransactionBlock({
+            digest: suiTxHash,
+            options: { showEvents: true },
+          });
+
+          const messageEvent = txData.events?.find(e => e.type.includes('MessageSent'));
+          if (!messageEvent) throw new Error('No MessageSent event in burn tx');
+
+          const { ethers } = require('ethers');
+          const messageBytes = messageEvent.parsedJson?.message;
+          if (!messageBytes) throw new Error('No message bytes in MessageSent event');
+
+          const messageHex  = '0x' + Buffer.from(messageBytes).toString('hex');
+          const messageHash = ethers.keccak256(messageHex);
+          console.log('Message hex:', messageHex.slice(0, 20) + '...');
+          console.log('Message hash:', messageHash);
+
+          // Step 2: Poll Circle attestation
+          console.log('Step 2: Polling attestation...');
+          const attestation = await pollAttestation(messageHash);
+
+          // Step 3: Mint USDC on Solana
+          console.log('Step 3: Minting on Solana...');
+          await receiveMessageOnSolana(messageHex, attestation);
+
+          // Step 4: Swap on Jupiter
+          console.log('Step 4: Swapping on Jupiter...');
+          const swap = await jupiterSwap(process.env.AGENT_SOL_ADDRESS, symbol, usdcAmount);
+          txHash = swap.txHash;
+          console.log('Swap complete:', txHash);
+
+          // Step 5: Transfer xStock tokens from agent wallet to user's Solana address
+          const userSolAddress = db.prepare('SELECT sol_address FROM users WHERE id = ?').get(user.id)?.sol_address;
+          if (userSolAddress) {
+            console.log('Step 5: Transferring xStock to user:', userSolAddress);
+            const transferTx = await transferXStockToUser(swap.mintAddress, userSolAddress, swap.rawOutputAmount);
+            console.log('Transfer complete:', transferTx);
+          } else {
+            console.warn('Step 5: No sol_address for user', user.id, '— tokens remain in agent wallet');
+          }
         }
       }
     } else {

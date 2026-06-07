@@ -21,10 +21,12 @@ app.use('/api/chat',      require('./routes/chat'));
 app.use('/api/prices',    require('./routes/prices').router);
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`
 🟢 ManagerX API on port ${PORT}
    Chains: ARB | SOL | SUI
    Mode: ${process.env.TRADE_MODE || 'mock'}
   `);
 });
+// CCTP bridge + Solana mint can take 60-120 seconds; override the default 5s socket timeout.
+server.timeout = 300_000;

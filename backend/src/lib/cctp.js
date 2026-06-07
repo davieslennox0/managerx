@@ -152,8 +152,179 @@ async function bridgeUsdcSuiToSolana(userSuiAddress, amountUsdc, solanaDestinati
   };
 }
 
+// ─── Solana → Sui direction ───────────────────────────────────────────────────
+
+// Burn USDC on Solana CCTP, routing it to userSuiAddress on Sui.
+// rawUsdcAmount is in micro-USDC (6 decimals), e.g. 5 USDC = 5_000_000.
+async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
+  const { Connection, PublicKey, Keypair, SystemProgram } = require('@solana/web3.js');
+  const anchor = require('@project-serum/anchor');
+  const { TOKEN_PROGRAM_ID } = require('@solana/spl-token');
+  const bs58 = require('bs58');
+
+  const MT  = new PublicKey('CCTPmbSD7gX1bxKPAmg77w8oFzNFpaQiQUWD43TKaecd');
+  const TMM = new PublicKey('CCTPiPYPc6AsJuwueEnWgSgucamXDZwBd53dQ11YiKX3');
+  const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+  const SUI_DOMAIN_ID = 8;
+
+  const connection = new Connection(
+    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+    'confirmed'
+  );
+
+  const agentKeypair = Keypair.fromSecretKey(bs58.default.decode(process.env.AGENT_SOL_PRIVATE_KEY));
+  const burnTokenAccount = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+  const messageSentEventDataKeypair = Keypair.generate();
+
+  // Sui address → 32-byte mintRecipient (Anchor "publicKey" wire type)
+  const suiAddrHex = userSuiAddress.replace('0x', '').padStart(64, '0');
+  const mintRecipient = new PublicKey(Buffer.from(suiAddrHex, 'hex'));
+
+  const provider = new anchor.AnchorProvider(
+    connection,
+    new anchor.Wallet(agentKeypair),
+    { commitment: 'confirmed' }
+  );
+
+  const idl = await anchor.Program.fetchIdl(TMM, provider);
+  if (!idl) throw new Error('Could not fetch TokenMessengerMinter IDL from on-chain');
+  const program = new anchor.Program(idl, TMM, provider);
+
+  const pda = (seeds, prog) => PublicKey.findProgramAddressSync(seeds, prog)[0];
+  const messageTransmitterPDA   = pda([Buffer.from('message_transmitter')], MT);
+  const tokenMessengerPDA       = pda([Buffer.from('token_messenger')], TMM);
+  const tokenMinterPDA          = pda([Buffer.from('token_minter')], TMM);
+  const localTokenPDA           = pda([Buffer.from('local_token'), USDC_MINT.toBuffer()], TMM);
+  const remoteTokenMessengerPDA = pda([Buffer.from('remote_token_messenger'), Buffer.from(SUI_DOMAIN_ID.toString())], TMM);
+  const senderAuthorityPDA      = pda([Buffer.from('sender_authority')], TMM);
+  const eventAuthorityPDA       = pda([Buffer.from('__event_authority')], TMM);
+
+  console.log('depositForBurn:', rawUsdcAmount, 'μUSDC → Sui', userSuiAddress);
+
+  const txSig = await program.methods
+    .depositForBurn({
+      amount: new anchor.BN(rawUsdcAmount.toString()),
+      destinationDomain: SUI_DOMAIN_ID,
+      mintRecipient,
+    })
+    .accounts({
+      owner: agentKeypair.publicKey,
+      eventRentPayer: agentKeypair.publicKey,
+      senderAuthorityPda: senderAuthorityPDA,
+      burnTokenAccount,
+      messageTransmitter: messageTransmitterPDA,
+      tokenMessenger: tokenMessengerPDA,
+      remoteTokenMessenger: remoteTokenMessengerPDA,
+      tokenMinter: tokenMinterPDA,
+      localToken: localTokenPDA,
+      burnTokenMint: USDC_MINT,
+      messageSentEventData: messageSentEventDataKeypair.publicKey,
+      messageTransmitterProgram: MT,
+      tokenMessengerMinterProgram: TMM,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      eventAuthority: eventAuthorityPDA,
+      program: TMM,
+    })
+    .signers([agentKeypair, messageSentEventDataKeypair])
+    .rpc();
+
+  console.log('depositForBurn tx:', txSig);
+  await connection.confirmTransaction(txSig, 'confirmed');
+
+  // Read CCTP message from event data account: disc(8)+sender(32)+vec_len(4)+msg(248) → offset 44
+  const accountInfo = await connection.getAccountInfo(messageSentEventDataKeypair.publicKey);
+  if (!accountInfo) throw new Error('messageSentEventData account not found after burn');
+
+  const MSG_OFFSET = 44, MSG_LENGTH = 248;
+  const messageBytes = accountInfo.data.slice(MSG_OFFSET, MSG_OFFSET + MSG_LENGTH);
+  const messageHex   = '0x' + messageBytes.toString('hex');
+  const messageHash  = ethers.keccak256(messageHex);
+
+  console.log('CCTP message hash:', messageHash);
+  return { txSig, messageHex, messageHash };
+}
+
+// Mint USDC on Sui from a validated CCTP message+attestation.
+// The mintRecipient encoded in the message receives the USDC.
+async function receiveMessageOnSui(messageHex, attestationHex) {
+  const client   = getSuiClient();
+  const keypair  = getAgentKeypair();
+  const msgBytes = Array.from(Buffer.from(messageHex.replace('0x', ''), 'hex'));
+  const attBytes = Array.from(Buffer.from(attestationHex.replace('0x', ''), 'hex'));
+
+  const tx = new Transaction();
+
+  const [receipt] = tx.moveCall({
+    target: `${SUI_CCTP.messageTransmitter}::receive_message::receive_message`,
+    arguments: [
+      tx.pure.vector('u8', msgBytes),
+      tx.pure.vector('u8', attBytes),
+      tx.object(SUI_CCTP.messageTransmitterState),
+    ],
+  });
+
+  const [stampTicketWithBurnMsg] = tx.moveCall({
+    target: `${SUI_CCTP.tokenMessengerMinter}::handle_receive_message::handle_receive_message`,
+    typeArguments: [USDC_SUI_TYPE],
+    arguments: [
+      receipt,
+      tx.object(SUI_CCTP.tokenMessengerMinterState),
+      tx.object(SUI_CCTP.denyList),
+      tx.object(SUI_CCTP.usdcTreasury),
+    ],
+  });
+
+  const [stampReceiptTicket] = tx.moveCall({
+    target: `${SUI_CCTP.tokenMessengerMinter}::handle_receive_message::deconstruct_stamp_receipt_ticket_with_burn_message`,
+    arguments: [stampTicketWithBurnMsg],
+  });
+
+  const [stampedReceipt] = tx.moveCall({
+    target: `${SUI_CCTP.messageTransmitter}::receive_message::stamp_receipt`,
+    typeArguments: [`${SUI_CCTP.tokenMessengerMinter}::message_transmitter_authenticator::MessageTransmitterAuthenticator`],
+    arguments: [stampReceiptTicket, tx.object(SUI_CCTP.messageTransmitterState)],
+  });
+
+  tx.moveCall({
+    target: `${SUI_CCTP.messageTransmitter}::receive_message::complete_receive_message`,
+    arguments: [stampedReceipt, tx.object(SUI_CCTP.messageTransmitterState)],
+  });
+
+  console.log('Submitting receiveMessage on Sui...');
+  const result = await client.signAndExecuteTransaction({
+    signer: keypair,
+    transaction: tx,
+    options: { showEffects: true, showEvents: true },
+  });
+
+  if (result.effects?.status?.status !== 'success') {
+    throw new Error('Sui receiveMessage failed: ' + JSON.stringify(result.effects?.status));
+  }
+
+  console.log('USDC minted on Sui:', result.digest);
+  return result.digest;
+}
+
+// Full Solana → Sui bridge: burn USDC on Solana, attest, mint on Sui.
+async function bridgeUsdcSolanaToSui(rawUsdcAmount, userSuiAddress) {
+  console.log(`Bridging ${rawUsdcAmount} μUSDC: Solana → Sui(${userSuiAddress})`);
+
+  const { txSig, messageHex, messageHash } = await depositForBurnOnSolana(rawUsdcAmount, userSuiAddress);
+  console.log('Solana burn tx:', txSig);
+
+  console.log('Polling Circle attestation...');
+  const attestation = await pollAttestation(messageHash);
+
+  console.log('Minting USDC on Sui...');
+  const suiDigest = await receiveMessageOnSui(messageHex, attestation);
+
+  return { burnTxHash: txSig, suiMintTxHash: suiDigest, messageHash };
+}
+
 module.exports = {
   bridgeUsdcSuiToSolana,
+  bridgeUsdcSolanaToSui,
   pollAttestation,
   SUI_CCTP,
   SOLANA_CCTP,

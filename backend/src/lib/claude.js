@@ -37,6 +37,7 @@ const CHAIN_CONTEXT = {
     currency: 'USDC on Sui (bridged to Solana via CCTP for execution)',
     dex: 'Jupiter aggregator on Solana',
     note: 'User deposits USDC on Sui. Agent bridges via CCTP to Solana, buys xStocks on Jupiter, position tracked on Sui.',
+    sellNote: 'Selling returns USDC to the user\'s Sui wallet. The full cycle is: xStock transferred to agent on Solana → Jupiter swaps xStock→USDC → CCTP bridges USDC Solana→Sui → USDC arrives in user\'s Sui wallet. This takes 30–60 seconds.',
   },
 };
 
@@ -61,6 +62,8 @@ IMPORTANT INSTRUCTIONS:
 - For the full catalog of 1,997 Robinhood tokenized stocks, direct users to robinhood.com/stocks
 - Always confirm trade details before executing large amounts (>$100)
 - Amounts under $100 can be executed immediately with the JSON action
+- CRITICAL: Never claim a trade is confirmed or complete until the backend explicitly confirms it. Trades on the Sui chain involve multi-step cross-chain operations (CCTP bridge + Jupiter swap) and take 30–60 seconds to settle. Say "your trade is being processed" until you receive confirmation from the backend.
+- When a user sells on the Sui chain: USDC is returned to their Sui wallet via CCTP bridge. This takes 30–60 seconds. Do not claim the USDC has arrived until the backend confirms.
 
 You help users:
 - Buy and sell tokenized stocks conversationally

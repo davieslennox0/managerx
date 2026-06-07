@@ -187,6 +187,77 @@ async function getXStockPrice(symbol) {
   } catch { return null; }
 }
 
+// Swap xStock → USDC via Jupiter (sell direction). Returns USDC amounts.
+async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
+  const agentKeypair = getAgentKeypair();
+
+  const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
+    params: {
+      inputMint: mintAddress,
+      outputMint: USDC_SOL,
+      amount: rawInputAmount,
+      slippageBps: 50,
+    }
+  });
+
+  const quote = quoteRes.data;
+
+  const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
+    quoteResponse: quote,
+    userPublicKey: agentKeypair.publicKey.toBase58(),
+    wrapAndUnwrapSol: false,
+  });
+
+  const connection = getConnection();
+  const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
+  const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+  transaction.sign([agentKeypair]);
+
+  const txid = await connection.sendRawTransaction(transaction.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+  await connection.confirmTransaction(txid, 'confirmed');
+
+  return {
+    txHash: txid,
+    usdcAmount: Number(quote.outAmount) / 1e6,
+    rawUsdcAmount: Number(quote.outAmount),
+  };
+}
+
+// Build an unsigned Solana SPL-token transfer transaction for the user to sign
+// (xStock from user's ATA → agent's ATA). Returns base64 tx bytes.
+async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmount) {
+  const {
+    getAssociatedTokenAddressSync,
+    createTransferInstruction,
+    TOKEN_2022_PROGRAM_ID,
+  } = require('@solana/spl-token');
+
+  const connection = getConnection();
+  const agentKeypair = getAgentKeypair();
+  const mint = new PublicKey(mintAddress);
+  const userPubkey = new PublicKey(userSolAddress);
+
+  const userATA  = getAssociatedTokenAddressSync(mint, userPubkey,           false, TOKEN_2022_PROGRAM_ID);
+  const agentATA = getAssociatedTokenAddressSync(mint, agentKeypair.publicKey, false, TOKEN_2022_PROGRAM_ID);
+
+  const transferIx = createTransferInstruction(
+    userATA,
+    agentATA,
+    userPubkey,
+    BigInt(rawAmount),
+    [],
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const tx = new Transaction({ recentBlockhash: blockhash, feePayer: userPubkey }).add(transferIx);
+
+  return tx.serialize({ requireAllSignatures: false }).toString('base64');
+}
+
 async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
   const {
     getOrCreateAssociatedTokenAccount,
@@ -240,4 +311,12 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
   return txid;
 }
 
-module.exports = { getSolPortfolio, jupiterSwap, getXStockPrice, XSTOCK_MINTS, transferXStockToUser };
+module.exports = {
+  getSolPortfolio,
+  jupiterSwap,
+  jupiterSwapXStockToUsdc,
+  buildSellTransferTransaction,
+  transferXStockToUser,
+  getXStockPrice,
+  XSTOCK_MINTS,
+};
