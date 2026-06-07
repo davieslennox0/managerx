@@ -172,7 +172,8 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
 }
 
 async function getXStockPrice(symbol) {
-  const mint = XSTOCK_MINTS[symbol];
+  const canonical = symbol.replace(/x$/i, '').toUpperCase() + 'x';
+  const mint = XSTOCK_MINTS[canonical];
   if (!mint) return null;
   try {
     const res = await axios.get(`https://price.jup.ag/v6/price?ids=${mint}&vsToken=${USDC_SOL}`);
