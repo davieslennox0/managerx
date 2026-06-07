@@ -126,7 +126,9 @@ async function getSolPortfolio(solAddress, userId) {
 }
 
 async function jupiterSwap(solAddress, symbol, usdcAmount) {
-  const mint = XSTOCK_MINTS[symbol];
+  // Normalise to canonical PLTRx / NVDAx form — strip trailing X/x, uppercase base, append 'x'.
+  const canonical = symbol.replace(/x$/i, '').toUpperCase() + 'x';
+  const mint = XSTOCK_MINTS[canonical];
   if (!mint) throw new Error(`Unknown xStock: ${symbol}`);
 
   const amountLamports = Math.round(usdcAmount * 1e6);
