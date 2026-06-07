@@ -164,7 +164,15 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
     maxRetries: 3,
   });
 
-  await connection.confirmTransaction(txid, 'confirmed');
+  const conf = await connection.confirmTransaction(txid, 'confirmed');
+  if (conf.value.err) {
+    const txData = await connection.getTransaction(txid, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    }).catch(() => null);
+    const logs = txData?.meta?.logMessages?.join('\n') || '';
+    throw new Error(`Jupiter swap failed on-chain (${txid}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+  }
 
   return {
     txHash: txid,
@@ -217,7 +225,16 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
     skipPreflight: true,
     maxRetries: 3,
   });
-  await connection.confirmTransaction(txid, 'confirmed');
+
+  const conf = await connection.confirmTransaction(txid, 'confirmed');
+  if (conf.value.err) {
+    const txData = await connection.getTransaction(txid, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    }).catch(() => null);
+    const logs = txData?.meta?.logMessages?.join('\n') || '';
+    throw new Error(`Jupiter swap failed on-chain (${txid}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+  }
 
   return {
     txHash: txid,
@@ -279,6 +296,19 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
     TOKEN_2022_PROGRAM_ID
   );
 
+  // Query the actual on-chain balance — catches silent swap failures before we
+  // send a transfer that would fail with a cryptic "insufficient funds" error.
+  const balanceInfo = await connection.getTokenAccountBalance(agentATA).catch(() => null);
+  const actualRaw = BigInt(balanceInfo?.value?.amount || '0');
+  if (actualRaw === 0n) {
+    throw new Error(
+      `Agent ATA has no ${mint.toBase58().slice(0, 8)}… tokens to transfer. ` +
+      `The Jupiter swap likely failed on-chain (use the swap txHash to investigate).`
+    );
+  }
+  // Transfer the full actual balance — all tokens in the agent ATA belong to this user.
+  const amountToTransfer = actualRaw;
+
   // Create user's ATA if it doesn't exist yet; agent pays the rent
   const userATA = await getOrCreateAssociatedTokenAccount(
     connection,
@@ -295,7 +325,7 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
     agentATA,
     userATA.address,
     agentKeypair.publicKey,
-    BigInt(rawAmount),
+    amountToTransfer,
     [],
     TOKEN_2022_PROGRAM_ID
   );
