@@ -27,6 +27,9 @@ const SOLANA_CCTP = {
 const USDC_SUI_TYPE = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
 const IRIS_API = 'https://iris-api.circle.com/v1/attestations';
 
+// Cache the TokenMessengerMinter IDL to avoid repeated on-chain RPC fetches
+let _tokenMessengerMinterIdl = null;
+
 function getSuiClient() {
   return new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
 }
@@ -176,6 +179,17 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
   const burnTokenAccount = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
   const messageSentEventDataKeypair = Keypair.generate();
 
+  // Pre-flight SOL check: CCTP depositForBurn creates a new on-chain account that
+  // requires ~0.003 SOL in rent. Fail early with a clear message if underfunded.
+  const agentSolBalance = await connection.getBalance(agentKeypair.publicKey);
+  const MIN_SOL_FOR_CCTP = 4_000_000; // 0.004 SOL covers rent + fees + agent min balance
+  if (agentSolBalance < MIN_SOL_FOR_CCTP) {
+    throw new Error(
+      `Agent wallet has insufficient SOL for CCTP bridge: ${(agentSolBalance / 1e9).toFixed(6)} SOL. ` +
+      `Please send at least 0.01 SOL to the agent wallet (${agentKeypair.publicKey.toString()}) and try again.`
+    );
+  }
+
   // Sui address → 32-byte mintRecipient (Anchor "publicKey" wire type)
   const suiAddrHex = userSuiAddress.replace('0x', '').padStart(64, '0');
   const mintRecipient = new PublicKey(Buffer.from(suiAddrHex, 'hex'));
@@ -186,7 +200,11 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
     { commitment: 'confirmed' }
   );
 
-  const idl = await anchor.Program.fetchIdl(TMM, provider);
+  if (!_tokenMessengerMinterIdl) {
+    console.log('Fetching TokenMessengerMinter IDL from on-chain (one-time)...');
+    _tokenMessengerMinterIdl = await anchor.Program.fetchIdl(TMM, provider);
+  }
+  const idl = _tokenMessengerMinterIdl;
   if (!idl) throw new Error('Could not fetch TokenMessengerMinter IDL from on-chain');
   const program = new anchor.Program(idl, TMM, provider);
 

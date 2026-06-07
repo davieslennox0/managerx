@@ -9,6 +9,10 @@ const MESSAGE_TRANSMITTER_PROGRAM_ID = new PublicKey('CCTPmbSD7gX1bxKPAmg77w8oFz
 const TOKEN_MESSENGER_MINTER_PROGRAM_ID = new PublicKey('CCTPiPYPc6AsJuwueEnWgSgucamXDZwBd53dQ11YiKX3');
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 
+// Cache IDLs to avoid repeated on-chain RPC fetches (slow and sometimes timeout)
+let _messageTransmitterIdl = null;
+let _tokenMessengerMinterIdl = null;
+
 function getConnection() {
   return new Connection(
     process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
@@ -138,16 +142,18 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
   );
 
   try {
-    // Fetch IDL from on-chain
-    const messageTransmitterIdl = await anchor.Program.fetchIdl(
-      MESSAGE_TRANSMITTER_PROGRAM_ID,
-      provider
-    );
+    // Fetch IDL from on-chain (cached after first call to avoid repeated slow RPC fetches)
+    if (!_messageTransmitterIdl) {
+      console.log('Fetching MessageTransmitter IDL from on-chain (one-time)...');
+      _messageTransmitterIdl = await anchor.Program.fetchIdl(MESSAGE_TRANSMITTER_PROGRAM_ID, provider);
+    }
+    if (!_tokenMessengerMinterIdl) {
+      console.log('Fetching TokenMessengerMinter IDL from on-chain (one-time)...');
+      _tokenMessengerMinterIdl = await anchor.Program.fetchIdl(TOKEN_MESSENGER_MINTER_PROGRAM_ID, provider);
+    }
 
-    const tokenMessengerIdl = await anchor.Program.fetchIdl(
-      TOKEN_MESSENGER_MINTER_PROGRAM_ID,
-      provider
-    );
+    const messageTransmitterIdl = _messageTransmitterIdl;
+    const tokenMessengerIdl = _tokenMessengerMinterIdl;
 
     if (!messageTransmitterIdl || !tokenMessengerIdl) {
       throw new Error('Could not fetch IDL from on-chain');
