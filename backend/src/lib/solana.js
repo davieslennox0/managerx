@@ -73,7 +73,7 @@ const XSTOCK_MINTS = {
 function getAgentKeypair() {
   const key = process.env.AGENT_SOL_PRIVATE_KEY;
   if (!key) throw new Error('AGENT_SOL_PRIVATE_KEY not set');
-  return Keypair.fromSecretKey(Buffer.from(key, 'base64'));
+  return Keypair.fromSecretKey(bs58.default.decode(key));
 }
 
 function getConnection() {
