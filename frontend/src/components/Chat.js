@@ -3,7 +3,9 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import { useUserWallets, useDynamicContext } from '@dynamic-labs/sdk-react-core';
 import { isSuiWallet } from '@dynamic-labs/sui';
+import { isSolanaWallet } from '@dynamic-labs/solana';
 import { Transaction } from '@mysten/sui/transactions';
+import { Transaction as SolTransaction } from '@solana/web3.js';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 
 const CCTP = {
@@ -93,80 +95,107 @@ export default function Chat({ user, chain }) {
 
     try {
       let suiTxHash = null;
+      let solTxHash = null;
+      let execUserSuiAddress = null;
 
       if (chain === 'sui') {
-        // Try userWallets first, fall back to primaryWallet if it's Sui
-        let suiWallet = userWallets?.find(w => isSuiWallet(w));
-        if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) {
-          suiWallet = primaryWallet;
-        }
-        if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
+        if (action.action === 'sell') {
+          // ── SELL: transfer xStock Solana→agent, backend swaps+bridges USDC→Sui ──
+          const solWallet = userWallets?.find(w => isSolanaWallet(w));
+          if (!solWallet) throw new Error('Solana wallet not connected. Please connect your Solana wallet.');
 
-        // Use the wallet's own address as authoritative for both on-chain lookups and signing.
-        const suiAddress = suiWallet.address || user.suiAddress;
-        console.log('Using Sui wallet:', suiWallet, 'address:', suiAddress);
+          const suiAddress = user.suiAddress;
+          if (!suiAddress) throw new Error('Sui address not found on your account.');
 
-        const amountMist = BigInt(Math.round(action.amount * 1e6));
-        const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
+          // Step 1: Backend builds the unsigned Solana SPL transfer tx
+          const { data: buildData } = await axios.post('/api/trade/build-sell-transfer', {
+            symbol: action.symbol,
+            amount: action.amount,
+            currency: action.currency || 'usd',
+          }, { headers: { Authorization: `Bearer ${token}` } });
 
-        const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
-        const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
-        if (!coins.data.length) throw new Error('No USDC in your Sui wallet');
+          // Step 2: User signs + submits via their Solana wallet
+          const signer = await solWallet.getSigner();
+          const connection = await solWallet.getConnection();
+          // atob → Uint8Array avoids needing a Buffer polyfill in the browser
+          const txBytes = Uint8Array.from(atob(buildData.transaction), c => c.charCodeAt(0));
+          const solTx = SolTransaction.from(txBytes);
+          const { signature } = await signer.signAndSendTransaction(solTx);
+          solTxHash = signature;
+          await connection.confirmTransaction(solTxHash, 'confirmed');
+          console.log('xStock transfer to agent confirmed:', solTxHash);
 
-        const coin = coins.data.find(c => BigInt(c.balance) >= amountMist);
-        if (!coin) throw new Error('Insufficient USDC balance');
+          execUserSuiAddress = suiAddress;
 
-        const tx = new Transaction();
-        tx.setSender(suiAddress);
-
-        let coinArg;
-        if (BigInt(coin.balance) === amountMist) {
-          coinArg = tx.object(coin.coinObjectId);
         } else {
-          [coinArg] = tx.splitCoins(tx.object(coin.coinObjectId), [amountMist]);
+          // ── BUY: user burns USDC on Sui, backend bridges+swaps+delivers xStock ──
+          let suiWallet = userWallets?.find(w => isSuiWallet(w));
+          if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) suiWallet = primaryWallet;
+          if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
+
+          const suiAddress = suiWallet.address || user.suiAddress;
+          console.log('Using Sui wallet:', suiWallet, 'address:', suiAddress);
+
+          const amountMist = BigInt(Math.round(action.amount * 1e6));
+          const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
+
+          const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
+          const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
+          if (!coins.data.length) throw new Error('No USDC in your Sui wallet');
+
+          const coin = coins.data.find(c => BigInt(c.balance) >= amountMist);
+          if (!coin) throw new Error('Insufficient USDC balance');
+
+          const tx = new Transaction();
+          tx.setSender(suiAddress);
+
+          let coinArg;
+          if (BigInt(coin.balance) === amountMist) {
+            coinArg = tx.object(coin.coinObjectId);
+          } else {
+            [coinArg] = tx.splitCoins(tx.object(coin.coinObjectId), [amountMist]);
+          }
+
+          tx.moveCall({
+            target: `${CCTP.TOKEN_MESSENGER_MINTER}::deposit_for_burn::deposit_for_burn`,
+            typeArguments: [CCTP.USDC_TYPE],
+            arguments: [
+              coinArg,
+              tx.pure.u32(CCTP.SOLANA_DOMAIN),
+              tx.pure.address(mintRecipientHex),
+              tx.object(CCTP.TOKEN_MESSENGER_STATE),
+              tx.object(CCTP.MESSAGE_TRANSMITTER_STATE),
+              tx.object(CCTP.DENY_LIST),
+              tx.object(CCTP.USDC_TREASURY),
+            ],
+          });
+
+          const connector = suiWallet._connector;
+          if (!connector) throw new Error('Sui wallet connector not found');
+          await connector.connect();
+          connector.getWalletClientByAddress({ accountAddress: suiAddress });
+          const signedTx = await connector.signTransaction(tx);
+          const result = await suiClient.executeTransactionBlock({
+            signature: signedTx.signature,
+            transactionBlock: signedTx.bytes,
+          });
+          suiTxHash = result.digest;
+          console.log('CCTP burn confirmed:', suiTxHash);
         }
-
-        tx.moveCall({
-          target: `${CCTP.TOKEN_MESSENGER_MINTER}::deposit_for_burn::deposit_for_burn`,
-          typeArguments: [CCTP.USDC_TYPE],
-          arguments: [
-            coinArg,
-            tx.pure.u32(CCTP.SOLANA_DOMAIN),
-            tx.pure.address(mintRecipientHex),
-            tx.object(CCTP.TOKEN_MESSENGER_STATE),
-            tx.object(CCTP.MESSAGE_TRANSMITTER_STATE),
-            tx.object(CCTP.DENY_LIST),
-            tx.object(CCTP.USDC_TREASURY),
-          ],
-        });
-
-        const connector = suiWallet._connector;
-        if (!connector) throw new Error('Sui wallet connector not found');
-        await connector.connect();
-        // setActiveAccountAddress is called synchronously on the first tick of this
-        // async method, so the account is set before signTransaction runs.
-        connector.getWalletClientByAddress({ accountAddress: suiAddress });
-        // Use signTransaction + executeTransactionBlock directly so result.digest
-        // is from a plain async call, not returned via a generator return statement.
-        const signedTx = await connector.signTransaction(tx);
-        const result = await suiClient.executeTransactionBlock({
-          signature: signedTx.signature,
-          transactionBlock: signedTx.bytes,
-        });
-        suiTxHash = result.digest;
-        console.log('CCTP burn confirmed:', suiTxHash);
       }
 
       const { data } = await axios.post('/api/trade/execute', {
         chain,
         suiTxHash,
+        solTxHash,
+        userSuiAddress: execUserSuiAddress,
         action: {
           type: action.action,
           symbol: action.symbol,
           amount: action.amount,
           currency: action.currency || 'usd',
         },
-      }, { headers: { Authorization: `Bearer ${token}` } });
+      }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
 
       const successMsg = {
         role: 'assistant',
@@ -189,6 +218,25 @@ export default function Chat({ user, chain }) {
   const handleNewChat = async () => {
     await axios.delete(`/api/chat/history/${chain}`, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     setMessages([]);
+  };
+
+  const handleRecoverUsdc = async () => {
+    const suiAddress = user.suiAddress;
+    if (!suiAddress) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '❌ No Sui address found on your account.' }]);
+      return;
+    }
+    setMessages(prev => [...prev, { role: 'assistant', content: '🔄 Checking for stuck USDC on Solana...' }]);
+    try {
+      const { data } = await axios.post('/api/trade/recover-solana-usdc',
+        { userSuiAddress: suiAddress },
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 }
+      );
+      setMessages(prev => [...prev, { role: 'assistant', content: `✅ ${data.message}` }]);
+    } catch (e) {
+      const msg = e.response?.data?.error || e.message;
+      setMessages(prev => [...prev, { role: 'assistant', content: `❌ Recovery failed: ${msg}` }]);
+    }
   };
 
   return (
@@ -232,6 +280,9 @@ export default function Chat({ user, chain }) {
       {/* Input */}
       <div style={{ padding: '12px 16px', borderTop: '1px solid #1C1C22', display: 'flex', gap: 8, background: '#0E0E14' }}>
         <button onClick={handleNewChat} style={{ background: 'none', border: 'none', color: '#2A2A30', cursor: 'pointer', fontSize: 14, padding: '0 4px' }} title="New chat">✦</button>
+        {chain === 'sui' && (
+          <button onClick={handleRecoverUsdc} style={{ background: 'none', border: 'none', color: '#2A2A30', cursor: 'pointer', fontSize: 9, letterSpacing: '0.1em', padding: '0 4px', fontFamily: 'Georgia, serif' }} title="Bridge any stuck USDC on Solana back to your Sui wallet">RECOVER</button>
+        )}
         <input
           value={input}
           onChange={e => setInput(e.target.value)}

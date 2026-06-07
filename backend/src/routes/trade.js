@@ -284,6 +284,44 @@ router.post('/build-burn', async (req, res) => {
   }
 });
 
+// Check agent's Solana USDC balance and bridge any amount to the user's Sui wallet.
+// Useful for recovering USDC that got stuck in the agent wallet from a failed/incomplete bridge.
+router.post('/recover-solana-usdc', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { userSuiAddress } = req.body;
+  if (!userSuiAddress) return res.status(400).json({ error: 'Missing userSuiAddress' });
+
+  try {
+    const { Connection, PublicKey } = require('@solana/web3.js');
+    const connection = new Connection(
+      process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed'
+    );
+
+    const usdcATA = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+    const balanceInfo = await connection.getTokenAccountBalance(usdcATA);
+    const rawBalance = parseInt(balanceInfo.value.amount, 10);
+
+    if (rawBalance === 0) {
+      return res.json({ success: true, message: 'No USDC found on Solana agent wallet', balance: 0 });
+    }
+
+    console.log(`Recovering ${rawBalance} μUSDC from Solana → Sui (${userSuiAddress})`);
+    const result = await bridgeUsdcSolanaToSui(rawBalance, userSuiAddress);
+
+    res.json({
+      success: true,
+      message: `Bridged ${(rawBalance / 1e6).toFixed(6)} USDC from Solana to your Sui wallet`,
+      usdcAmount: rawBalance / 1e6,
+      ...result,
+    });
+  } catch (e) {
+    console.error('Recover USDC error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get transaction history
 router.get('/history', (req, res) => {
   const user = authUser(req);
