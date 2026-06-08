@@ -8,6 +8,12 @@ import { SuiWalletConnectors } from '@dynamic-labs/sui';
 import App from './App';
 import './index.css';
 
+// Stable reference required by Dynamic's dependency array.
+// Replaces whatever RPC Dynamic has configured (often a rate-limited private URL)
+// with the public Solana mainnet endpoint so embedded wallet signing works.
+const solNetworksOverride = (networks) =>
+  networks.map(n => ({ ...n, rpcUrls: ['https://api.mainnet-beta.solana.com'] }));
+
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <DynamicContextProvider
@@ -22,6 +28,9 @@ root.render(
         generateWalletOnLogin: true,
       },
       initialAuthenticationMode: 'connect-and-sign',
+      overrides: {
+        solNetworks: solNetworksOverride,
+      },
     }}
   >
     <App />
