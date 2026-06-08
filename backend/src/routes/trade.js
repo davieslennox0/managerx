@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, transferXStockToUser, estimateGasCostUsdc, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, transferXStockToUser, estimateGasCostUsdc, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -68,6 +68,24 @@ router.post('/build-sell-transfer', async (req, res) => {
     res.json({ transaction, mintAddress, rawAmount, shares });
   } catch (e) {
     console.error('Build sell transfer error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Receive the user-signed sell-transfer tx, countersign as fee payer, submit.
+// Separate from /execute so the blockhash doesn't expire waiting for the backend.
+router.post('/submit-sell-transfer', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { signedTx } = req.body;
+  if (!signedTx) return res.status(400).json({ error: 'Missing signedTx' });
+
+  try {
+    const txHash = await countersignAndSubmitSellTransfer(signedTx);
+    res.json({ txHash });
+  } catch (e) {
+    console.error('Submit sell transfer error:', e);
     res.status(500).json({ error: e.message });
   }
 });

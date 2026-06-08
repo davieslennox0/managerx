@@ -308,12 +308,35 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
     );
 
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
-    // Agent is fee payer — user's embedded wallet needs no SOL
+    // Agent is fee payer — user's embedded wallet needs no SOL.
+    // Agent does NOT pre-sign here; user signs first, then POSTs to
+    // /submit-sell-transfer where the backend countersigns + submits.
+    // Pre-signing here would be invalidated if the wallet refreshes the blockhash.
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey }).add(transferIx);
-    // Agent pre-signs as fee payer; user adds their signature to authorize the token debit
-    tx.partialSign(agentKeypair);
 
     return tx.serialize({ requireAllSignatures: false }).toString('base64');
+  });
+}
+
+// Receive a user-signed sell-transfer tx, countersign as fee payer, and submit.
+async function countersignAndSubmitSellTransfer(userSignedTxBase64) {
+  const txBytes = Buffer.from(userSignedTxBase64, 'base64');
+  const tx = Transaction.from(txBytes);
+  const agentKeypair = getAgentKeypair();
+  tx.partialSign(agentKeypair);
+
+  return withFallback(async (connection) => {
+    const id = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+    const conf = await connection.confirmTransaction(id, 'confirmed');
+    if (conf.value.err) {
+      const txData = await connection.getTransaction(id, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      }).catch(() => null);
+      const logs = txData?.meta?.logMessages?.join('\n') || '';
+      throw new Error(`Sell transfer failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+    }
+    return id;
   });
 }
 
@@ -394,6 +417,7 @@ module.exports = {
   jupiterSwap,
   jupiterSwapXStockToUsdc,
   buildSellTransferTransaction,
+  countersignAndSubmitSellTransfer,
   transferXStockToUser,
   estimateGasCostUsdc,
   getXStockPrice,

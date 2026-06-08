@@ -114,27 +114,32 @@ export default function Chat({ user, chain }) {
             currency: action.currency || 'usd',
           }, { headers: { Authorization: `Bearer ${token}` } });
 
-          // Step 2: User signs + submits via their Solana wallet
+          // Step 2: User SIGNS ONLY — backend countersigns as fee payer + submits.
+          // This avoids the "invalid signature" error caused by wallets refreshing
+          // the blockhash after the backend pre-signs.
           const connection = await solWallet.getConnection();
-          // atob → Uint8Array avoids needing a Buffer polyfill in the browser
           const txBytes = Uint8Array.from(atob(buildData.transaction), c => c.charCodeAt(0));
           const solTx = SolTransaction.from(txBytes);
-          // Dynamic's WaaS SVM wallet routes signAndSendTransaction through a UI popup
-          // that incorrectly labels the network as "Ethereum". Use internalSignAndSendTransaction
-          // to bypass the popup. The WaaS connector requires activeAccountAddress to be set
-          // before signing (same pattern as the Sui WaaS connector).
-          // For injected wallets (Phantom etc.) fall back to the signer directly.
+
+          let userSignedTxBase64;
           const solConnector = solWallet._connector;
-          if (solConnector && typeof solConnector.internalSignAndSendTransaction === 'function') {
+          if (solConnector && typeof solConnector.internalSignTransaction === 'function') {
             if (typeof solConnector.setActiveAccountAddress === 'function') {
               solConnector.setActiveAccountAddress(solWallet.address);
             }
-            solTxHash = await solConnector.internalSignAndSendTransaction(solTx);
+            const signed = await solConnector.internalSignTransaction(solTx);
+            userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
           } else {
             const signer = await solWallet.getSigner();
-            const { signature } = await signer.signAndSendTransaction(solTx);
-            solTxHash = signature;
+            const signed = await signer.signTransaction(solTx);
+            userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
           }
+
+          // Step 3: Backend countersigns as fee payer + submits to Solana
+          const { data: submitData } = await axios.post('/api/trade/submit-sell-transfer', {
+            signedTx: userSignedTxBase64,
+          }, { headers: { Authorization: `Bearer ${token}` } });
+          solTxHash = submitData.txHash;
           await connection.confirmTransaction(solTxHash, 'confirmed');
           console.log('xStock transfer to agent confirmed:', solTxHash);
 
