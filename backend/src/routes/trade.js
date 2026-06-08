@@ -285,17 +285,23 @@ router.post('/build-burn', async (req, res) => {
     const coins = await client.getCoins({ owner: suiAddress, coinType: USDC_SUI_TYPE });
     if (!coins.data.length) return res.status(400).json({ error: 'No USDC in Sui wallet' });
 
-    const coin = coins.data.find(c => BigInt(c.balance) >= amountMist);
-    if (!coin) return res.status(400).json({ error: 'Insufficient USDC balance' });
+    const totalBalance = coins.data.reduce((a, c) => a + BigInt(c.balance), 0n);
+    if (totalBalance < amountMist) return res.status(400).json({ error: 'Insufficient USDC balance' });
 
     const tx = new Transaction();
     tx.setSender(suiAddress);
 
+    // Merge all coin objects so fragmented balances combine into one
+    const primaryCoin = tx.object(coins.data[0].coinObjectId);
+    if (coins.data.length > 1) {
+      tx.mergeCoins(primaryCoin, coins.data.slice(1).map(c => tx.object(c.coinObjectId)));
+    }
+
     let coinToUse;
-    if (BigInt(coin.balance) === amountMist) {
-      coinToUse = tx.object(coin.coinObjectId);
+    if (totalBalance === amountMist) {
+      coinToUse = primaryCoin;
     } else {
-      const [splitCoin] = tx.splitCoins(tx.object(coin.coinObjectId), [amountMist]);
+      const [splitCoin] = tx.splitCoins(primaryCoin, [amountMist]);
       coinToUse = splitCoin;
     }
 

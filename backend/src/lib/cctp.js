@@ -180,14 +180,52 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
   const messageSentEventDataKeypair = Keypair.generate();
 
   // Pre-flight SOL check: CCTP depositForBurn creates a new on-chain account that
-  // requires ~0.003 SOL in rent. Fail early with a clear message if underfunded.
+  // requires ~0.003 SOL in rent. Auto-topup from USDC via Jupiter if underfunded.
   const agentSolBalance = await connection.getBalance(agentKeypair.publicKey);
   const MIN_SOL_FOR_CCTP = 4_000_000; // 0.004 SOL covers rent + fees + agent min balance
   if (agentSolBalance < MIN_SOL_FOR_CCTP) {
-    throw new Error(
-      `Agent wallet has insufficient SOL for CCTP bridge: ${(agentSolBalance / 1e9).toFixed(6)} SOL. ` +
-      `Please send at least 0.01 SOL to the agent wallet (${agentKeypair.publicKey.toString()}) and try again.`
-    );
+    const TARGET_SOL = 10_000_000; // swap up to 0.01 SOL worth
+    const neededLamports = TARGET_SOL - agentSolBalance;
+    console.log(`Agent SOL low (${(agentSolBalance/1e9).toFixed(6)}), swapping USDC → SOL for gas...`);
+    try {
+      const USDC_MINT_ADDR = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+      const WSOL_MINT_ADDR = 'So11111111111111111111111111111111111111112';
+      // Quote: how much USDC do we need to get neededLamports of SOL?
+      const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
+        params: {
+          inputMint: USDC_MINT_ADDR,
+          outputMint: WSOL_MINT_ADDR,
+          amount: neededLamports,
+          swapMode: 'ExactOut',
+          slippageBps: 100,
+        },
+        timeout: 10_000,
+      });
+      const quote = quoteRes.data;
+      const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
+        quoteResponse: quote,
+        userPublicKey: agentKeypair.publicKey.toString(),
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true,
+        prioritizationFeeLamports: 1000,
+      }, { timeout: 15_000 });
+      const { VersionedTransaction } = require('@solana/web3.js');
+      const swapTxBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
+      const swapTx = VersionedTransaction.deserialize(swapTxBuf);
+      swapTx.sign([agentKeypair]);
+      const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: false });
+      await connection.confirmTransaction(sig, 'confirmed');
+      console.log(`SOL topup complete: ${sig}`);
+      // Re-read actual USDC balance after the swap consumed some
+      const usdcInfo = await connection.getTokenAccountBalance(burnTokenAccount);
+      rawUsdcAmount = parseInt(usdcInfo.value.amount, 10);
+      console.log(`USDC balance after topup: ${rawUsdcAmount} μUSDC`);
+    } catch (e) {
+      throw new Error(
+        `Agent wallet has insufficient SOL for CCTP bridge (${(agentSolBalance/1e9).toFixed(6)} SOL) ` +
+        `and auto-topup from USDC failed: ${e.message}`
+      );
+    }
   }
 
   // Sui address → 32-byte mintRecipient (Anchor "publicKey" wire type)
