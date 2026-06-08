@@ -143,16 +143,21 @@ export default function Chat({ user, chain }) {
           const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
           if (!coins.data.length) throw new Error('No USDC in your Sui wallet');
 
-          const coin = coins.data.find(c => BigInt(c.balance) >= amountMist);
-          if (!coin) throw new Error('Insufficient USDC balance');
+          const totalBalance = coins.data.reduce((a, c) => a + BigInt(c.balance), 0n);
+          if (totalBalance < amountMist) throw new Error(`Insufficient USDC balance ($${(Number(totalBalance)/1e6).toFixed(2)} available)`);
 
           // Step 1: Build the tx kind only (no gas — agent will sponsor)
           const tx = new Transaction();
+          // Merge all coin objects so fragmented balances combine into one
+          const primaryCoin = tx.object(coins.data[0].coinObjectId);
+          if (coins.data.length > 1) {
+            tx.mergeCoins(primaryCoin, coins.data.slice(1).map(c => tx.object(c.coinObjectId)));
+          }
           let coinArg;
-          if (BigInt(coin.balance) === amountMist) {
-            coinArg = tx.object(coin.coinObjectId);
+          if (totalBalance === amountMist) {
+            coinArg = primaryCoin;
           } else {
-            [coinArg] = tx.splitCoins(tx.object(coin.coinObjectId), [amountMist]);
+            [coinArg] = tx.splitCoins(primaryCoin, [amountMist]);
           }
           tx.moveCall({
             target: `${CCTP.TOKEN_MESSENGER_MINTER}::deposit_for_burn::deposit_for_burn`,
