@@ -135,12 +135,14 @@ export default function Chat({ user, chain }) {
             userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
           }
 
-          // Step 3: Backend countersigns as fee payer + submits to Solana
+          // Step 3: Backend countersigns as fee payer + submits to Solana (up to 120s)
           const { data: submitData } = await axios.post('/api/trade/submit-sell-transfer', {
             signedTx: userSignedTxBase64,
+            blockhash: buildData.blockhash,
+            lastValidBlockHeight: buildData.lastValidBlockHeight,
           }, { headers: { Authorization: `Bearer ${token}` } });
           solTxHash = submitData.txHash;
-          await connection.confirmTransaction(solTxHash, 'confirmed');
+          // Backend already confirmed — no need to re-confirm here
           console.log('xStock transfer to agent confirmed:', solTxHash);
 
           execUserSuiAddress = suiAddress;

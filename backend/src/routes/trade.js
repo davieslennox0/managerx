@@ -63,9 +63,9 @@ router.post('/build-sell-transfer', async (req, res) => {
 
     // xStock tokens use 6 decimals (consistent with Jupiter's outAmount / 1e6 convention)
     const rawAmount = Math.round(shares * 1e6);
-    const transaction = await buildSellTransferTransaction(mintAddress, user.sol_address, rawAmount);
+    const { txBase64, blockhash, lastValidBlockHeight } = await buildSellTransferTransaction(mintAddress, user.sol_address, rawAmount);
 
-    res.json({ transaction, mintAddress, rawAmount, shares });
+    res.json({ transaction: txBase64, blockhash, lastValidBlockHeight, mintAddress, rawAmount, shares });
   } catch (e) {
     console.error('Build sell transfer error:', e);
     res.status(500).json({ error: e.message });
@@ -78,11 +78,11 @@ router.post('/submit-sell-transfer', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { signedTx } = req.body;
+  const { signedTx, blockhash, lastValidBlockHeight } = req.body;
   if (!signedTx) return res.status(400).json({ error: 'Missing signedTx' });
 
   try {
-    const txHash = await countersignAndSubmitSellTransfer(signedTx);
+    const txHash = await countersignAndSubmitSellTransfer(signedTx, blockhash, lastValidBlockHeight);
     res.json({ txHash });
   } catch (e) {
     console.error('Submit sell transfer error:', e);

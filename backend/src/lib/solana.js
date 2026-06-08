@@ -1,4 +1,4 @@
-const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, ComputeBudgetProgram } = require('@solana/web3.js');
 const axios = require('axios');
 const bs58 = require('bs58');
 const { withFallback } = require('./solana_connection');
@@ -307,27 +307,41 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
       TOKEN_2022_PROGRAM_ID
     );
 
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
     // Agent is fee payer — user's embedded wallet needs no SOL.
     // Agent does NOT pre-sign here; user signs first, then POSTs to
     // /submit-sell-transfer where the backend countersigns + submits.
     // Pre-signing here would be invalidated if the wallet refreshes the blockhash.
-    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey }).add(transferIx);
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
+    // Priority fee: 50k micro-lamports/CU so validators process it quickly
+    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }));
+    tx.add(transferIx);
 
-    return tx.serialize({ requireAllSignatures: false }).toString('base64');
+    const txBase64 = tx.serialize({ requireAllSignatures: false }).toString('base64');
+    return { txBase64, blockhash, lastValidBlockHeight };
   });
 }
 
 // Receive a user-signed sell-transfer tx, countersign as fee payer, and submit.
-async function countersignAndSubmitSellTransfer(userSignedTxBase64) {
+// blockhash + lastValidBlockHeight come from the build step so we can use the
+// block-height confirmation strategy (120s window instead of web3.js 30s default).
+async function countersignAndSubmitSellTransfer(userSignedTxBase64, blockhash, lastValidBlockHeight) {
   const txBytes = Buffer.from(userSignedTxBase64, 'base64');
   const tx = Transaction.from(txBytes);
   const agentKeypair = getAgentKeypair();
   tx.partialSign(agentKeypair);
+  const serialized = tx.serialize();
 
   return withFallback(async (connection) => {
-    const id = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
-    const conf = await connection.confirmTransaction(id, 'confirmed');
+    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 5 });
+    console.log('Sell transfer submitted:', id, '— confirming (up to 120s)...');
+
+    const conf = await connection.confirmTransaction(
+      { signature: id, blockhash, lastValidBlockHeight },
+      'confirmed'
+    );
+
     if (conf.value.err) {
       const txData = await connection.getTransaction(id, {
         commitment: 'confirmed',
