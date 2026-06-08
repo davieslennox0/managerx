@@ -115,13 +115,21 @@ export default function Chat({ user, chain }) {
           }, { headers: { Authorization: `Bearer ${token}` } });
 
           // Step 2: User signs + submits via their Solana wallet
-          const signer = await solWallet.getSigner();
           const connection = await solWallet.getConnection();
           // atob → Uint8Array avoids needing a Buffer polyfill in the browser
           const txBytes = Uint8Array.from(atob(buildData.transaction), c => c.charCodeAt(0));
           const solTx = SolTransaction.from(txBytes);
-          const { signature } = await signer.signAndSendTransaction(solTx);
-          solTxHash = signature;
+          // Dynamic's embedded (Turnkey) wallet routes signAndSendTransaction through
+          // a UI popup that incorrectly shows "Ethereum". Use internalSignAndSendTransaction
+          // to bypass it. For injected wallets (Phantom etc.) fall back to the signer.
+          const solConnector = solWallet._connector;
+          if (solConnector && typeof solConnector.internalSignAndSendTransaction === 'function') {
+            solTxHash = await solConnector.internalSignAndSendTransaction(solTx);
+          } else {
+            const signer = await solWallet.getSigner();
+            const { signature } = await signer.signAndSendTransaction(solTx);
+            solTxHash = signature;
+          }
           await connection.confirmTransaction(solTxHash, 'confirmed');
           console.log('xStock transfer to agent confirmed:', solTxHash);
 
