@@ -45,10 +45,7 @@ const MINT_RECIPIENT_HEX = 'f8f1282b7c221ed8f75205abd6dac51f971d8705c816b40cf3ec
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function getSolanaConnection() {
-  return new Connection(
-    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    'confirmed'
-  );
+  return require('../lib/solana_connection').getConnection();
 }
 
 function getAgentSolKeypair() {

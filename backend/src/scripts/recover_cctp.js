@@ -26,10 +26,7 @@ const FAILED_TXS = process.argv.slice(2).length
     ];
 
 function getConnection() {
-  return new Connection(
-    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    'confirmed'
-  );
+  return require('../lib/solana_connection').getConnection();
 }
 
 // Parse message bytes from Anchor-encoded receiveMessage instruction data.

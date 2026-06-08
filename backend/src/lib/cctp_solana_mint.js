@@ -14,10 +14,7 @@ let _messageTransmitterIdl = null;
 let _tokenMessengerMinterIdl = null;
 
 function getConnection() {
-  return new Connection(
-    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    'confirmed'
-  );
+  return require('./solana_connection').getConnection();
 }
 
 function getAgentKeypair() {
@@ -100,13 +97,12 @@ function findAuthorityPda() {
 
 // Receive USDC on Solana (mint side of bridge)
 async function receiveMessageOnSolana(messageHex, attestationHex) {
-  const connection = getConnection();
+  const { withFallback } = require('./solana_connection');
   const agentKeypair = getAgentKeypair();
 
   const messageBytes = Buffer.from(messageHex.replace('0x', ''), 'hex');
   const attestationBytes = Buffer.from(attestationHex.replace('0x', ''), 'hex');
 
-  // Parse nonce from message (bytes 12-20)
   const nonce = messageBytes.readBigUInt64BE(12);
   const sourceDomain = messageBytes.readUInt32BE(4);
 
@@ -114,10 +110,7 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
   console.log('Nonce:', nonce.toString());
   console.log('Source domain:', sourceDomain);
 
-  // Generate event account keypair
-  const eventAccountKeypair = Keypair.generate();
-
-  // PDAs
+  // PDAs are pure computation — derived once, reused across retries
   const messageTransmitterPDA = findMessageTransmitterPDA();
   const authorityPDA = findAuthorityPda();
   const tokenMessengerPDA = findTokenMessengerPDA();
@@ -126,23 +119,17 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
   const localTokenPDA = findLocalTokenPDA(USDC_MINT);
   const custodyTokenPDA = findCustodyTokenAccountPDA(USDC_MINT);
   const usedNoncePDA = findUsedNoncePDA(nonce, sourceDomain);
-
-  // Extract burn_token from message body (CCTP header=116 bytes, body version=4 bytes, then 32-byte burn_token)
   const burnToken = messageBytes.slice(120, 152).toString('hex');
   const tokenPairPDA = findTokenPairPDA(sourceDomain, burnToken);
-
-  // Recipient token account
   const recipientTokenAccount = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
 
-  // Load IDL from on-chain
-  const provider = new anchor.AnchorProvider(
-    connection,
-    new anchor.Wallet(agentKeypair),
-    { commitment: 'confirmed' }
-  );
+  return withFallback(async (connection) => {
+    const provider = new anchor.AnchorProvider(
+      connection,
+      new anchor.Wallet(agentKeypair),
+      { commitment: 'confirmed' }
+    );
 
-  try {
-    // Fetch IDL from on-chain (cached after first call to avoid repeated slow RPC fetches)
     if (!_messageTransmitterIdl) {
       console.log('Fetching MessageTransmitter IDL from on-chain (one-time)...');
       _messageTransmitterIdl = await anchor.Program.fetchIdl(MESSAGE_TRANSMITTER_PROGRAM_ID, provider);
@@ -152,26 +139,16 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
       _tokenMessengerMinterIdl = await anchor.Program.fetchIdl(TOKEN_MESSENGER_MINTER_PROGRAM_ID, provider);
     }
 
-    const messageTransmitterIdl = _messageTransmitterIdl;
-    const tokenMessengerIdl = _tokenMessengerMinterIdl;
-
-    if (!messageTransmitterIdl || !tokenMessengerIdl) {
+    if (!_messageTransmitterIdl || !_tokenMessengerMinterIdl) {
       throw new Error('Could not fetch IDL from on-chain');
     }
 
     const messageTransmitterProgram = new anchor.Program(
-      messageTransmitterIdl,
+      _messageTransmitterIdl,
       MESSAGE_TRANSMITTER_PROGRAM_ID,
       provider
     );
 
-    const tokenMessengerProgram = new anchor.Program(
-      tokenMessengerIdl,
-      TOKEN_MESSENGER_MINTER_PROGRAM_ID,
-      provider
-    );
-
-    // Call receiveMessage
     const tx = await messageTransmitterProgram.methods
       .receiveMessage({
         message: messageBytes,
@@ -215,11 +192,7 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
 
     console.log('USDC minted on Solana:', tx);
     return { txHash: tx, status: 'minted' };
-
-  } catch (e) {
-    console.error('Solana mint error:', e.message);
-    throw e;
-  }
+  });
 }
 
 module.exports = { receiveMessageOnSolana };

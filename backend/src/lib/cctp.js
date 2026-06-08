@@ -160,145 +160,133 @@ async function bridgeUsdcSuiToSolana(userSuiAddress, amountUsdc, solanaDestinati
 // Burn USDC on Solana CCTP, routing it to userSuiAddress on Sui.
 // rawUsdcAmount is in micro-USDC (6 decimals), e.g. 5 USDC = 5_000_000.
 async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
-  const { Connection, PublicKey, Keypair, SystemProgram } = require('@solana/web3.js');
+  const { PublicKey, Keypair, SystemProgram } = require('@solana/web3.js');
   const anchor = require('@project-serum/anchor');
   const { TOKEN_PROGRAM_ID } = require('@solana/spl-token');
   const bs58 = require('bs58');
+  const { withFallback } = require('./solana_connection');
 
   const MT  = new PublicKey('CCTPmbSD7gX1bxKPAmg77w8oFzNFpaQiQUWD43TKaecd');
   const TMM = new PublicKey('CCTPiPYPc6AsJuwueEnWgSgucamXDZwBd53dQ11YiKX3');
   const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
   const SUI_DOMAIN_ID = 8;
 
-  const connection = new Connection(
-    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    'confirmed'
-  );
-
   const agentKeypair = Keypair.fromSecretKey(bs58.default.decode(process.env.AGENT_SOL_PRIVATE_KEY));
   const burnTokenAccount = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
-  const messageSentEventDataKeypair = Keypair.generate();
-
-  // Pre-flight SOL check: CCTP depositForBurn creates a new on-chain account that
-  // requires ~0.003 SOL in rent. Auto-topup from USDC via Jupiter if underfunded.
-  const agentSolBalance = await connection.getBalance(agentKeypair.publicKey);
-  const MIN_SOL_FOR_CCTP = 4_000_000; // 0.004 SOL covers rent + fees + agent min balance
-  if (agentSolBalance < MIN_SOL_FOR_CCTP) {
-    const TARGET_SOL = 10_000_000; // swap up to 0.01 SOL worth
-    const neededLamports = TARGET_SOL - agentSolBalance;
-    console.log(`Agent SOL low (${(agentSolBalance/1e9).toFixed(6)}), swapping USDC → SOL for gas...`);
-    try {
-      const USDC_MINT_ADDR = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-      const WSOL_MINT_ADDR = 'So11111111111111111111111111111111111111112';
-      // Quote: how much USDC do we need to get neededLamports of SOL?
-      const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
-        params: {
-          inputMint: USDC_MINT_ADDR,
-          outputMint: WSOL_MINT_ADDR,
-          amount: neededLamports,
-          swapMode: 'ExactOut',
-          slippageBps: 100,
-        },
-        timeout: 10_000,
-      });
-      const quote = quoteRes.data;
-      const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
-        quoteResponse: quote,
-        userPublicKey: agentKeypair.publicKey.toString(),
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 1000,
-      }, { timeout: 15_000 });
-      const { VersionedTransaction } = require('@solana/web3.js');
-      const swapTxBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
-      const swapTx = VersionedTransaction.deserialize(swapTxBuf);
-      swapTx.sign([agentKeypair]);
-      const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: false });
-      await connection.confirmTransaction(sig, 'confirmed');
-      console.log(`SOL topup complete: ${sig}`);
-      // Re-read actual USDC balance after the swap consumed some
-      const usdcInfo = await connection.getTokenAccountBalance(burnTokenAccount);
-      rawUsdcAmount = parseInt(usdcInfo.value.amount, 10);
-      console.log(`USDC balance after topup: ${rawUsdcAmount} μUSDC`);
-    } catch (e) {
-      throw new Error(
-        `Agent wallet has insufficient SOL for CCTP bridge (${(agentSolBalance/1e9).toFixed(6)} SOL) ` +
-        `and auto-topup from USDC failed: ${e.message}`
-      );
-    }
-  }
-
-  // Sui address → 32-byte mintRecipient (Anchor "publicKey" wire type)
   const suiAddrHex = userSuiAddress.replace('0x', '').padStart(64, '0');
   const mintRecipient = new PublicKey(Buffer.from(suiAddrHex, 'hex'));
 
-  const provider = new anchor.AnchorProvider(
-    connection,
-    new anchor.Wallet(agentKeypair),
-    { commitment: 'confirmed' }
-  );
+  return withFallback(async (connection) => {
+    const messageSentEventDataKeypair = Keypair.generate();
 
-  if (!_tokenMessengerMinterIdl) {
-    console.log('Fetching TokenMessengerMinter IDL from on-chain (one-time)...');
-    _tokenMessengerMinterIdl = await anchor.Program.fetchIdl(TMM, provider);
-  }
-  const idl = _tokenMessengerMinterIdl;
-  if (!idl) throw new Error('Could not fetch TokenMessengerMinter IDL from on-chain');
-  const program = new anchor.Program(idl, TMM, provider);
+    // Pre-flight SOL check: CCTP depositForBurn creates a new on-chain account that
+    // requires ~0.003 SOL in rent. Auto-topup from USDC via Jupiter if underfunded.
+    const agentSolBalance = await connection.getBalance(agentKeypair.publicKey);
+    const MIN_SOL_FOR_CCTP = 4_000_000;
+    let effectiveUsdcAmount = rawUsdcAmount;
+    if (agentSolBalance < MIN_SOL_FOR_CCTP) {
+      const TARGET_SOL = 10_000_000;
+      const neededLamports = TARGET_SOL - agentSolBalance;
+      console.log(`Agent SOL low (${(agentSolBalance/1e9).toFixed(6)}), swapping USDC → SOL for gas...`);
+      try {
+        const USDC_MINT_ADDR = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+        const WSOL_MINT_ADDR = 'So11111111111111111111111111111111111111112';
+        const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
+          params: { inputMint: USDC_MINT_ADDR, outputMint: WSOL_MINT_ADDR, amount: neededLamports, swapMode: 'ExactOut', slippageBps: 100 },
+          timeout: 10_000,
+        });
+        const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
+          quoteResponse: quoteRes.data,
+          userPublicKey: agentKeypair.publicKey.toString(),
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          prioritizationFeeLamports: 1000,
+        }, { timeout: 15_000 });
+        const { VersionedTransaction } = require('@solana/web3.js');
+        const swapTx = VersionedTransaction.deserialize(Buffer.from(swapRes.data.swapTransaction, 'base64'));
+        swapTx.sign([agentKeypair]);
+        const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: false });
+        await connection.confirmTransaction(sig, 'confirmed');
+        console.log(`SOL topup complete: ${sig}`);
+        const usdcInfo = await connection.getTokenAccountBalance(burnTokenAccount);
+        effectiveUsdcAmount = parseInt(usdcInfo.value.amount, 10);
+        console.log(`USDC balance after topup: ${effectiveUsdcAmount} μUSDC`);
+      } catch (e) {
+        throw new Error(
+          `Agent wallet has insufficient SOL for CCTP bridge (${(agentSolBalance/1e9).toFixed(6)} SOL) ` +
+          `and auto-topup from USDC failed: ${e.message}`
+        );
+      }
+    }
 
-  const pda = (seeds, prog) => PublicKey.findProgramAddressSync(seeds, prog)[0];
-  const messageTransmitterPDA   = pda([Buffer.from('message_transmitter')], MT);
-  const tokenMessengerPDA       = pda([Buffer.from('token_messenger')], TMM);
-  const tokenMinterPDA          = pda([Buffer.from('token_minter')], TMM);
-  const localTokenPDA           = pda([Buffer.from('local_token'), USDC_MINT.toBuffer()], TMM);
-  const remoteTokenMessengerPDA = pda([Buffer.from('remote_token_messenger'), Buffer.from(SUI_DOMAIN_ID.toString())], TMM);
-  const senderAuthorityPDA      = pda([Buffer.from('sender_authority')], TMM);
-  const eventAuthorityPDA       = pda([Buffer.from('__event_authority')], TMM);
+    const provider = new anchor.AnchorProvider(
+      connection,
+      new anchor.Wallet(agentKeypair),
+      { commitment: 'confirmed' }
+    );
 
-  console.log('depositForBurn:', rawUsdcAmount, 'μUSDC → Sui', userSuiAddress);
+    if (!_tokenMessengerMinterIdl) {
+      console.log('Fetching TokenMessengerMinter IDL from on-chain (one-time)...');
+      _tokenMessengerMinterIdl = await anchor.Program.fetchIdl(TMM, provider);
+    }
+    const idl = _tokenMessengerMinterIdl;
+    if (!idl) throw new Error('Could not fetch TokenMessengerMinter IDL from on-chain');
+    const program = new anchor.Program(idl, TMM, provider);
 
-  const txSig = await program.methods
-    .depositForBurn({
-      amount: new anchor.BN(rawUsdcAmount.toString()),
-      destinationDomain: SUI_DOMAIN_ID,
-      mintRecipient,
-    })
-    .accounts({
-      owner: agentKeypair.publicKey,
-      eventRentPayer: agentKeypair.publicKey,
-      senderAuthorityPda: senderAuthorityPDA,
-      burnTokenAccount,
-      messageTransmitter: messageTransmitterPDA,
-      tokenMessenger: tokenMessengerPDA,
-      remoteTokenMessenger: remoteTokenMessengerPDA,
-      tokenMinter: tokenMinterPDA,
-      localToken: localTokenPDA,
-      burnTokenMint: USDC_MINT,
-      messageSentEventData: messageSentEventDataKeypair.publicKey,
-      messageTransmitterProgram: MT,
-      tokenMessengerMinterProgram: TMM,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      eventAuthority: eventAuthorityPDA,
-      program: TMM,
-    })
-    .signers([agentKeypair, messageSentEventDataKeypair])
-    .rpc();
+    const pda = (seeds, prog) => PublicKey.findProgramAddressSync(seeds, prog)[0];
+    const messageTransmitterPDA   = pda([Buffer.from('message_transmitter')], MT);
+    const tokenMessengerPDA       = pda([Buffer.from('token_messenger')], TMM);
+    const tokenMinterPDA          = pda([Buffer.from('token_minter')], TMM);
+    const localTokenPDA           = pda([Buffer.from('local_token'), USDC_MINT.toBuffer()], TMM);
+    const remoteTokenMessengerPDA = pda([Buffer.from('remote_token_messenger'), Buffer.from(SUI_DOMAIN_ID.toString())], TMM);
+    const senderAuthorityPDA      = pda([Buffer.from('sender_authority')], TMM);
+    const eventAuthorityPDA       = pda([Buffer.from('__event_authority')], TMM);
 
-  console.log('depositForBurn tx:', txSig);
-  await connection.confirmTransaction(txSig, 'confirmed');
+    console.log('depositForBurn:', effectiveUsdcAmount, 'μUSDC → Sui', userSuiAddress);
 
-  // Read CCTP message from event data account: disc(8)+sender(32)+vec_len(4)+msg(248) → offset 44
-  const accountInfo = await connection.getAccountInfo(messageSentEventDataKeypair.publicKey);
-  if (!accountInfo) throw new Error('messageSentEventData account not found after burn');
+    const txSig = await program.methods
+      .depositForBurn({
+        amount: new anchor.BN(effectiveUsdcAmount.toString()),
+        destinationDomain: SUI_DOMAIN_ID,
+        mintRecipient,
+      })
+      .accounts({
+        owner: agentKeypair.publicKey,
+        eventRentPayer: agentKeypair.publicKey,
+        senderAuthorityPda: senderAuthorityPDA,
+        burnTokenAccount,
+        messageTransmitter: messageTransmitterPDA,
+        tokenMessenger: tokenMessengerPDA,
+        remoteTokenMessenger: remoteTokenMessengerPDA,
+        tokenMinter: tokenMinterPDA,
+        localToken: localTokenPDA,
+        burnTokenMint: USDC_MINT,
+        messageSentEventData: messageSentEventDataKeypair.publicKey,
+        messageTransmitterProgram: MT,
+        tokenMessengerMinterProgram: TMM,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        eventAuthority: eventAuthorityPDA,
+        program: TMM,
+      })
+      .signers([agentKeypair, messageSentEventDataKeypair])
+      .rpc();
 
-  const MSG_OFFSET = 44, MSG_LENGTH = 248;
-  const messageBytes = accountInfo.data.slice(MSG_OFFSET, MSG_OFFSET + MSG_LENGTH);
-  const messageHex   = '0x' + messageBytes.toString('hex');
-  const messageHash  = ethers.keccak256(messageHex);
+    console.log('depositForBurn tx:', txSig);
+    await connection.confirmTransaction(txSig, 'confirmed');
 
-  console.log('CCTP message hash:', messageHash);
-  return { txSig, messageHex, messageHash };
+    // Read CCTP message from event data account: disc(8)+sender(32)+vec_len(4)+msg(248) → offset 44
+    const accountInfo = await connection.getAccountInfo(messageSentEventDataKeypair.publicKey);
+    if (!accountInfo) throw new Error('messageSentEventData account not found after burn');
+
+    const MSG_OFFSET = 44, MSG_LENGTH = 248;
+    const messageBytes = accountInfo.data.slice(MSG_OFFSET, MSG_OFFSET + MSG_LENGTH);
+    const messageHex   = '0x' + messageBytes.toString('hex');
+    const messageHash  = ethers.keccak256(messageHex);
+
+    console.log('CCTP message hash:', messageHash);
+    return { txSig, messageHex, messageHash };
+  });
 }
 
 // Mint USDC on Sui from a validated CCTP message+attestation.

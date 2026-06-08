@@ -74,8 +74,7 @@ async function extractMessageBytes() {
 
   // Try live RPC first, fall back to hardcoded hex.
   try {
-    const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = require('../lib/solana_connection').getConnection();
     const info = await connection.getAccountInfo(new PublicKey(EVENT_DATA_ACCOUNT));
     if (!info) throw new Error('Account not found on-chain');
     accountData = info.data;

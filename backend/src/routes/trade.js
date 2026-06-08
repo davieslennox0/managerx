@@ -123,9 +123,11 @@ router.post('/execute', async (req, res) => {
           // Deduct gas for swap tx + bridge burn tx from the USDC output before bridging.
           const sellGasCostUsdc = await estimateGasCostUsdc(2);
           const sellGasCostRaw  = Math.round(sellGasCostUsdc * 1e6);
-          const bridgeRaw = Math.max(swapResult.rawUsdcAmount - sellGasCostRaw, 0);
+          const feeBps = parseInt(process.env.PLATFORM_FEE_BPS || '0');
+          const sellFeeRaw = Math.round(swapResult.rawUsdcAmount * feeBps / 10000);
+          const bridgeRaw = Math.max(swapResult.rawUsdcAmount - sellGasCostRaw - sellFeeRaw, 0);
           if (bridgeRaw <= 0) throw new Error(`Sell proceeds too small to cover gas fees (~$${sellGasCostUsdc.toFixed(4)})`);
-          console.log(`Sell gas deduction: $${sellGasCostUsdc.toFixed(4)} → bridging ${(bridgeRaw/1e6).toFixed(6)} USDC`);
+          console.log(`Sell deductions: gas=$${sellGasCostUsdc.toFixed(4)} fee=$${(sellFeeRaw/1e6).toFixed(4)} → bridging ${(bridgeRaw/1e6).toFixed(6)} USDC`);
 
           // Step 2: Bridge USDC Solana → Sui (burn on Solana, attest, mint on Sui)
           console.log('Sell Step 2: Bridging USDC Solana → Sui for', userSuiAddress);
@@ -134,7 +136,11 @@ router.post('/execute', async (req, res) => {
 
         } else {
           // ── Buy: USDC (Sui) → xStock (Solana) ────────────────────────────────
-          const usdcAmount = currency === 'usd' ? amount : shares * price;
+          const usdcAmountGross = currency === 'usd' ? amount : shares * price;
+          const feeBps = parseInt(process.env.PLATFORM_FEE_BPS || '0');
+          const buyFeeUsdc = usdcAmountGross * feeBps / 10000;
+          const usdcAmount = usdcAmountGross - buyFeeUsdc;
+          console.log(`Buy fee: $${buyFeeUsdc.toFixed(4)} (${feeBps} bps) → swapping $${usdcAmount.toFixed(4)} USDC`);
 
           if (!suiTxHash) return res.status(400).json({ error: 'Missing Sui burn transaction' });
 
@@ -340,10 +346,8 @@ router.post('/recover-solana-usdc', async (req, res) => {
   if (!userSuiAddress) return res.status(400).json({ error: 'Missing userSuiAddress' });
 
   try {
-    const { Connection, PublicKey } = require('@solana/web3.js');
-    const connection = new Connection(
-      process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com', 'confirmed'
-    );
+    const { getConnection: _getSolConn } = require('../lib/solana_connection');
+    const connection = _getSolConn();
 
     const usdcATA = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
     const balanceInfo = await connection.getTokenAccountBalance(usdcATA);

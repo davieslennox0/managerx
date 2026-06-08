@@ -12,7 +12,7 @@ import './index.css';
 // Replaces whatever RPC Dynamic has configured (often a rate-limited private URL)
 // with the public Solana mainnet endpoint so embedded wallet signing works.
 const solNetworksOverride = (networks) =>
-  networks.map(n => ({ ...n, rpcUrls: ['https://api.mainnet-beta.solana.com'] }));
+  networks.map(n => ({ ...n, rpcUrls: ['https://mainnet.helius-rpc.com/?api-key=4de1718f-f24d-4112-9324-32f3deb3d717'] }));
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

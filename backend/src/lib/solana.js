@@ -1,6 +1,7 @@
 const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction } = require('@solana/web3.js');
 const axios = require('axios');
 const bs58 = require('bs58');
+const { withFallback } = require('./solana_connection');
 
 const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
@@ -78,10 +79,7 @@ function getAgentKeypair() {
 }
 
 function getConnection() {
-  return new Connection(
-    process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-    'confirmed'
-  );
+  return require('./solana_connection').getConnection();
 }
 
 // Returns estimated gas cost in USDC for N Solana transactions.
@@ -105,38 +103,37 @@ async function getSolPortfolio(solAddress, userId) {
   if (!solAddress) return { chain: 'solana', usdcBalance: 0, positions: [] };
 
   try {
-    const connection = getConnection();
-    const pubkey = new PublicKey(solAddress);
+    return await withFallback(async (connection) => {
+      const pubkey = new PublicKey(solAddress);
 
-    // Get USDC balance
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
-      mint: new PublicKey(USDC_SOL),
-    });
-    const usdcBalance = tokenAccounts.value.reduce((acc, a) =>
-      acc + (a.account.data.parsed.info.tokenAmount.uiAmount || 0), 0
-    );
-
-    // Get ALL token accounts in one call instead of 60 separate calls
-    const positions = [];
-    try {
-      const allAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
-        programId: new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'),
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
+        mint: new PublicKey(USDC_SOL),
       });
-      const mintToSymbol = Object.fromEntries(
-        Object.entries(XSTOCK_MINTS).map(([sym, mint]) => [mint, sym])
+      const usdcBalance = tokenAccounts.value.reduce((acc, a) =>
+        acc + (a.account.data.parsed.info.tokenAmount.uiAmount || 0), 0
       );
-      for (const account of allAccounts.value) {
-        const info = account.account.data.parsed.info;
-        const symbol = mintToSymbol[info.mint];
-        if (symbol && info.tokenAmount.uiAmount > 0) {
-          positions.push({ symbol, shares: info.tokenAmount.uiAmount, mint: info.mint });
-        }
-      }
-    } catch (e) {
-      console.error('Token fetch error:', e.message);
-    }
 
-    return { chain: 'solana', address: solAddress, usdcBalance, positions };
+      const positions = [];
+      try {
+        const allAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
+          programId: new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'),
+        });
+        const mintToSymbol = Object.fromEntries(
+          Object.entries(XSTOCK_MINTS).map(([sym, mint]) => [mint, sym])
+        );
+        for (const account of allAccounts.value) {
+          const info = account.account.data.parsed.info;
+          const symbol = mintToSymbol[info.mint];
+          if (symbol && info.tokenAmount.uiAmount > 0) {
+            positions.push({ symbol, shares: info.tokenAmount.uiAmount, mint: info.mint });
+          }
+        }
+      } catch (e) {
+        console.error('Token fetch error:', e.message);
+      }
+
+      return { chain: 'solana', address: solAddress, usdcBalance, positions };
+    });
   } catch (e) {
     console.error('SOL portfolio error:', e.message);
     return { chain: 'solana', usdcBalance: 0, positions: [] };
@@ -176,26 +173,24 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
     wrapAndUnwrapSol: false,
   });
 
-  // Deserialize, sign and send
-  const connection = getConnection();
   const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
   const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
   transaction.sign([agentKeypair]);
+  const serialized = transaction.serialize();
 
-  const txid = await connection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: true,
-    maxRetries: 3,
+  const txid = await withFallback(async (connection) => {
+    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 3 });
+    const conf = await connection.confirmTransaction(id, 'confirmed');
+    if (conf.value.err) {
+      const txData = await connection.getTransaction(id, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      }).catch(() => null);
+      const logs = txData?.meta?.logMessages?.join('\n') || '';
+      throw new Error(`Jupiter swap failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+    }
+    return id;
   });
-
-  const conf = await connection.confirmTransaction(txid, 'confirmed');
-  if (conf.value.err) {
-    const txData = await connection.getTransaction(txid, {
-      commitment: 'confirmed',
-      maxSupportedTransactionVersion: 0,
-    }).catch(() => null);
-    const logs = txData?.meta?.logMessages?.join('\n') || '';
-    throw new Error(`Jupiter swap failed on-chain (${txid}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
-  }
 
   return {
     txHash: txid,
@@ -240,25 +235,24 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
     wrapAndUnwrapSol: false,
   });
 
-  const connection = getConnection();
   const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
   const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
   transaction.sign([agentKeypair]);
+  const serialized = transaction.serialize();
 
-  const txid = await connection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: true,
-    maxRetries: 3,
+  const txid = await withFallback(async (connection) => {
+    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 3 });
+    const conf = await connection.confirmTransaction(id, 'confirmed');
+    if (conf.value.err) {
+      const txData = await connection.getTransaction(id, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      }).catch(() => null);
+      const logs = txData?.meta?.logMessages?.join('\n') || '';
+      throw new Error(`Jupiter swap failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+    }
+    return id;
   });
-
-  const conf = await connection.confirmTransaction(txid, 'confirmed');
-  if (conf.value.err) {
-    const txData = await connection.getTransaction(txid, {
-      commitment: 'confirmed',
-      maxSupportedTransactionVersion: 0,
-    }).catch(() => null);
-    const logs = txData?.meta?.logMessages?.join('\n') || '';
-    throw new Error(`Jupiter swap failed on-chain (${txid}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
-  }
 
   return {
     txHash: txid,
@@ -277,33 +271,33 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
     TOKEN_2022_PROGRAM_ID,
   } = require('@solana/spl-token');
 
-  const connection = getConnection();
-  const agentKeypair = getAgentKeypair();
-  const mint = new PublicKey(mintAddress);
-  const userPubkey = new PublicKey(userSolAddress);
+  return withFallback(async (connection) => {
+    const agentKeypair = getAgentKeypair();
+    const mint = new PublicKey(mintAddress);
+    const userPubkey = new PublicKey(userSolAddress);
 
-  const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
-  const decimals = mintInfo.decimals;
+    const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    const decimals = mintInfo.decimals;
 
-  const userATA  = getAssociatedTokenAddressSync(mint, userPubkey,            false, TOKEN_2022_PROGRAM_ID);
-  const agentATA = getAssociatedTokenAddressSync(mint, agentKeypair.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    const userATA  = getAssociatedTokenAddressSync(mint, userPubkey,            false, TOKEN_2022_PROGRAM_ID);
+    const agentATA = getAssociatedTokenAddressSync(mint, agentKeypair.publicKey, false, TOKEN_2022_PROGRAM_ID);
 
-  // Token-2022 extensions (transfer fees etc.) require transfer_checked, not transfer
-  const transferIx = createTransferCheckedInstruction(
-    userATA,
-    mint,
-    agentATA,
-    userPubkey,
-    BigInt(rawAmount),
-    decimals,
-    [],
-    TOKEN_2022_PROGRAM_ID
-  );
+    const transferIx = createTransferCheckedInstruction(
+      userATA,
+      mint,
+      agentATA,
+      userPubkey,
+      BigInt(rawAmount),
+      decimals,
+      [],
+      TOKEN_2022_PROGRAM_ID
+    );
 
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const tx = new Transaction({ recentBlockhash: blockhash, feePayer: userPubkey }).add(transferIx);
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: userPubkey }).add(transferIx);
 
-  return tx.serialize({ requireAllSignatures: false }).toString('base64');
+    return tx.serialize({ requireAllSignatures: false }).toString('base64');
+  });
 }
 
 async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
@@ -315,69 +309,67 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
     TOKEN_2022_PROGRAM_ID,
   } = require('@solana/spl-token');
 
-  const connection = getConnection();
-  const agentKeypair = getAgentKeypair();
-  const mint = new PublicKey(mintAddress);
-  const userPubkey = new PublicKey(userSolAddress);
+  return withFallback(async (connection) => {
+    const agentKeypair = getAgentKeypair();
+    const mint = new PublicKey(mintAddress);
+    const userPubkey = new PublicKey(userSolAddress);
 
-  // Agent's ATA is guaranteed to exist (tokens just landed here from the swap)
-  const agentATA = getAssociatedTokenAddressSync(
-    mint,
-    agentKeypair.publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID
-  );
-
-  // Query the actual on-chain balance — catches silent swap failures before we
-  // send a transfer that would fail with a cryptic "insufficient funds" error.
-  const balanceInfo = await connection.getTokenAccountBalance(agentATA).catch(() => null);
-  const actualRaw = BigInt(balanceInfo?.value?.amount || '0');
-  if (actualRaw === 0n) {
-    throw new Error(
-      `Agent ATA has no ${mint.toBase58().slice(0, 8)}… tokens to transfer. ` +
-      `The Jupiter swap likely failed on-chain (use the swap txHash to investigate).`
+    const agentATA = getAssociatedTokenAddressSync(
+      mint,
+      agentKeypair.publicKey,
+      false,
+      TOKEN_2022_PROGRAM_ID
     );
-  }
-  // Transfer the full actual balance — all tokens in the agent ATA belong to this user.
-  const amountToTransfer = actualRaw;
 
-  // Fetch decimals — required by transfer_checked (Token-2022 mandate)
-  const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
-  const decimals = mintInfo.decimals;
+    // Query the actual on-chain balance — catches silent swap failures before we
+    // send a transfer that would fail with a cryptic "insufficient funds" error.
+    const balanceInfo = await connection.getTokenAccountBalance(agentATA).catch(() => null);
+    const actualRaw = BigInt(balanceInfo?.value?.amount || '0');
+    if (actualRaw === 0n) {
+      throw new Error(
+        `Agent ATA has no ${mint.toBase58().slice(0, 8)}… tokens to transfer. ` +
+        `The Jupiter swap likely failed on-chain (use the swap txHash to investigate).`
+      );
+    }
+    const amountToTransfer = actualRaw;
 
-  // Create user's ATA if it doesn't exist yet; agent pays the rent
-  const userATA = await getOrCreateAssociatedTokenAccount(
-    connection,
-    agentKeypair,
-    mint,
-    userPubkey,
-    false,
-    'confirmed',
-    undefined,
-    TOKEN_2022_PROGRAM_ID
-  );
+    const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    const decimals = mintInfo.decimals;
 
-  // Token-2022 extensions require transfer_checked (not bare transfer)
-  const transferIx = createTransferCheckedInstruction(
-    agentATA,
-    mint,
-    userATA.address,
-    agentKeypair.publicKey,
-    amountToTransfer,
-    decimals,
-    [],
-    TOKEN_2022_PROGRAM_ID
-  );
+    // Create user's ATA if it doesn't exist yet; agent pays the rent.
+    // getOrCreateAssociatedTokenAccount is idempotent — safe to retry.
+    const userATA = await getOrCreateAssociatedTokenAccount(
+      connection,
+      agentKeypair,
+      mint,
+      userPubkey,
+      false,
+      'confirmed',
+      undefined,
+      TOKEN_2022_PROGRAM_ID
+    );
 
-  const tx = new Transaction().add(transferIx);
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = agentKeypair.publicKey;
+    const transferIx = createTransferCheckedInstruction(
+      agentATA,
+      mint,
+      userATA.address,
+      agentKeypair.publicKey,
+      amountToTransfer,
+      decimals,
+      [],
+      TOKEN_2022_PROGRAM_ID
+    );
 
-  const txid = await connection.sendTransaction(tx, [agentKeypair], { maxRetries: 3 });
-  await connection.confirmTransaction(txid, 'confirmed');
+    const tx = new Transaction().add(transferIx);
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = agentKeypair.publicKey;
 
-  return txid;
+    const txid = await connection.sendTransaction(tx, [agentKeypair], { maxRetries: 3 });
+    await connection.confirmTransaction(txid, 'confirmed');
+
+    return txid;
+  });
 }
 
 module.exports = {
