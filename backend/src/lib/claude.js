@@ -44,15 +44,26 @@ const CHAIN_CONTEXT = {
 async function chat({ messages, chain, portfolio }) {
   const ctx = CHAIN_CONTEXT[chain] || CHAIN_CONTEXT.arbitrum;
 
+  const crossChain = portfolio.crossChain;
+  const crossChainSummary = crossChain ? `
+Cross-chain asset snapshot (all wallets, live):
+- Arbitrum${crossChain.arbitrum.address ? ` (${crossChain.arbitrum.address})` : ' (not connected)'}: $${crossChain.arbitrum.usdcBalance.toFixed(2)} USDC${crossChain.arbitrum.positions.length ? `, ${crossChain.arbitrum.positions.length} stock position(s)` : ''}
+- Solana${crossChain.solana.address ? ` (${crossChain.solana.address})` : ' (not connected)'}: $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}
+- Sui${crossChain.sui.address ? ` (${crossChain.sui.address})` : ' (not connected)'}: $${crossChain.sui.usdcBalance.toFixed(2)} USDC` : '';
+
+  // Strip crossChain from active portfolio before showing it (it's already in the summary above)
+  const activePortfolio = { ...portfolio };
+  delete activePortfolio.crossChain;
+
   const system = `You are ManagerX, an AI portfolio agent for tokenized RWA stocks on blockchain.
 
 Active chain: ${ctx.name}
 Available assets: ${ctx.assets}
 Settlement currency: ${ctx.currency}
 Execution venue: ${ctx.dex}
-
-Current portfolio:
-${JSON.stringify(portfolio, null, 2)}
+${crossChainSummary}
+Current portfolio (active chain):
+${JSON.stringify(activePortfolio, null, 2)}
 
 IMPORTANT INSTRUCTIONS:
 - You DO have access to real-time price data for major stocks via our price feed

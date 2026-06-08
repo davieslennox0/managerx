@@ -5,6 +5,7 @@ const db = require('../db');
 const { chat } = require('../lib/claude');
 const { getArbPortfolio } = require('../lib/arbitrum');
 const { getSolPortfolio } = require('../lib/solana');
+const { getSuiPortfolio } = require('../lib/sui');
 const { getPrice } = require('./prices');
 
 const router = express.Router();
@@ -49,29 +50,46 @@ router.post('/', async (req, res) => {
   if (!messages?.length) return res.status(400).json({ error: 'No messages' });
 
   try {
+    // Fetch all chains in parallel so Claude sees assets everywhere
+    const [arbPortfolio, solPortfolio, suiPortfolio] = await Promise.all([
+      user.evm_address ? getArbPortfolio(user.evm_address, user.id).catch(() => ({})) : Promise.resolve({}),
+      user.sol_address ? getSolPortfolio(user.sol_address, user.id).catch(() => ({})) : Promise.resolve({}),
+      user.sui_address ? getSuiPortfolio(user.sui_address, user.id).catch(() => ({})) : Promise.resolve({}),
+    ]);
+
+    const crossChain = {
+      arbitrum: {
+        address: user.evm_address || null,
+        usdcBalance: arbPortfolio.usdcBalance || 0,
+        positions: arbPortfolio.positions || [],
+      },
+      solana: {
+        address: user.sol_address || null,
+        usdcBalance: solPortfolio.usdcBalance || 0,
+        positions: solPortfolio.positions || [],
+      },
+      sui: {
+        address: user.sui_address || null,
+        usdcBalance: suiPortfolio.usdcBalance || 0,
+        positions: suiPortfolio.positions || [],
+      },
+    };
+
     let portfolio = {};
-    if (chain === 'arbitrum' && user.evm_address) {
-      portfolio = await getArbPortfolio(user.evm_address, user.id).catch(() => ({}));
+    if (chain === 'arbitrum') {
+      portfolio = { ...arbPortfolio, crossChain };
+    } else if (chain === 'solana') {
+      portfolio = { ...solPortfolio, crossChain };
     } else if (chain === 'sui') {
-      // Fetch real on-chain Sui USDC balance
-      const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
-      const suiClient = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
-      let suiUsdcBalance = 0;
-      if (user.sui_address) {
-        try {
-          const coins = await suiClient.getCoins({
-            owner: user.sui_address,
-            coinType: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
-          });
-          suiUsdcBalance = coins.data.reduce((acc, c) => acc + Number(c.balance), 0) / 1e6;
-        } catch(e) { console.error('Sui balance error:', e.message); }
-      }
       portfolio = {
         chain: 'sui',
-        usdcBalance: suiUsdcBalance,
         suiAddress: user.sui_address || 'Not connected',
         solAddress: user.sol_address || 'Not connected',
-        positions: [],
+        usdcBalance: (suiPortfolio.usdcBalance || 0) + (solPortfolio.usdcBalance || 0),
+        suiUsdcBalance: suiPortfolio.usdcBalance || 0,
+        solUsdcBalance: solPortfolio.usdcBalance || 0,
+        positions: solPortfolio.positions || [],
+        crossChain,
       };
     }
 
