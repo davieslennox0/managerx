@@ -119,11 +119,16 @@ export default function Chat({ user, chain }) {
           // atob → Uint8Array avoids needing a Buffer polyfill in the browser
           const txBytes = Uint8Array.from(atob(buildData.transaction), c => c.charCodeAt(0));
           const solTx = SolTransaction.from(txBytes);
-          // Dynamic's embedded (Turnkey) wallet routes signAndSendTransaction through
-          // a UI popup that incorrectly shows "Ethereum". Use internalSignAndSendTransaction
-          // to bypass it. For injected wallets (Phantom etc.) fall back to the signer.
+          // Dynamic's WaaS SVM wallet routes signAndSendTransaction through a UI popup
+          // that incorrectly labels the network as "Ethereum". Use internalSignAndSendTransaction
+          // to bypass the popup. The WaaS connector requires activeAccountAddress to be set
+          // before signing (same pattern as the Sui WaaS connector).
+          // For injected wallets (Phantom etc.) fall back to the signer directly.
           const solConnector = solWallet._connector;
           if (solConnector && typeof solConnector.internalSignAndSendTransaction === 'function') {
+            if (typeof solConnector.setActiveAccountAddress === 'function') {
+              solConnector.setActiveAccountAddress(solWallet.address);
+            }
             solTxHash = await solConnector.internalSignAndSendTransaction(solTx);
           } else {
             const signer = await solWallet.getSigner();
