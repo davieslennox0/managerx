@@ -261,10 +261,13 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
   };
 }
 
-// Build an unsigned Solana SPL-token transfer transaction for the user to sign
-// (xStock from user's ATA → agent's ATA). Returns base64 tx bytes.
+// Build a Solana SPL-token transfer transaction for the user to co-sign
+// (xStock from user's ATA → agent's ATA).
+// Agent is fee payer and pre-signs so the user's embedded wallet needs no SOL.
+// Returns base64 partially-signed tx bytes; user must add their signature.
 async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmount) {
   const {
+    getOrCreateAssociatedTokenAccount,
     getAssociatedTokenAddressSync,
     createTransferCheckedInstruction,
     getMint,
@@ -279,13 +282,24 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
     const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
     const decimals = mintInfo.decimals;
 
-    const userATA  = getAssociatedTokenAddressSync(mint, userPubkey,            false, TOKEN_2022_PROGRAM_ID);
-    const agentATA = getAssociatedTokenAddressSync(mint, agentKeypair.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    const userATA = getAssociatedTokenAddressSync(mint, userPubkey, false, TOKEN_2022_PROGRAM_ID);
+
+    // Ensure agent's ATA exists for this token (creates + funds it if first-time sell)
+    const agentATAAccount = await getOrCreateAssociatedTokenAccount(
+      connection,
+      agentKeypair,
+      mint,
+      agentKeypair.publicKey,
+      false,
+      'confirmed',
+      undefined,
+      TOKEN_2022_PROGRAM_ID
+    );
 
     const transferIx = createTransferCheckedInstruction(
       userATA,
       mint,
-      agentATA,
+      agentATAAccount.address,
       userPubkey,
       BigInt(rawAmount),
       decimals,
@@ -294,7 +308,10 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
     );
 
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
-    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: userPubkey }).add(transferIx);
+    // Agent is fee payer — user's embedded wallet needs no SOL
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey }).add(transferIx);
+    // Agent pre-signs as fee payer; user adds their signature to authorize the token debit
+    tx.partialSign(agentKeypair);
 
     return tx.serialize({ requireAllSignatures: false }).toString('base64');
   });
