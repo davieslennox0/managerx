@@ -24,7 +24,11 @@ router.get('/history/:chain', (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const msgs = db.prepare(
-    'SELECT role, content FROM conversations WHERE user_id = ? AND chain = ? ORDER BY created_at ASC LIMIT 100'
+    `SELECT role, content FROM (
+       SELECT role, content, created_at FROM conversations
+       WHERE user_id = ? AND chain = ?
+       ORDER BY created_at DESC LIMIT 100
+     ) ORDER BY created_at ASC`
   ).all(user.id, req.params.chain);
   res.json({ messages: msgs });
 });

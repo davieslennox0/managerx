@@ -187,6 +187,8 @@ export default function Chat({ user, chain }) {
           const connector = suiWallet._connector;
           if (!connector) throw new Error('Sui wallet connector not found');
           await connector.connect();
+          // WaaS connector requires the active address to be set before signing
+          if (connector.setActiveAccountAddress) connector.setActiveAccountAddress(suiAddress);
           const sponsoredTx = Transaction.from(sponsoredTxBytes);
           const signedTx = await connector.signTransaction(sponsoredTx);
 
