@@ -313,8 +313,8 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
     // /submit-sell-transfer where the backend countersigns + submits.
     // Pre-signing here would be invalidated if the wallet refreshes the blockhash.
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
-    // Priority fee: 50k micro-lamports/CU so validators process it quickly
-    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }));
+    // Priority fee: 200k micro-lamports/CU — competitive enough for mainnet congestion
+    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
     tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }));
     tx.add(transferIx);
 
@@ -334,13 +334,26 @@ async function countersignAndSubmitSellTransfer(userSignedTxBase64, blockhash, l
   const serialized = tx.serialize();
 
   return withFallback(async (connection) => {
-    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 5 });
+    // maxRetries: 0 — we own the retry loop so the tx keeps being rebroadcast
+    // until it lands or the blockhash expires (prevents silent drop from mempool).
+    const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+
+    const id = await sendRaw();
     console.log('Sell transfer submitted:', id, '— confirming (up to 120s)...');
 
-    const conf = await connection.confirmTransaction(
-      { signature: id, blockhash, lastValidBlockHeight },
-      'confirmed'
-    );
+    const retryTimer = setInterval(() => {
+      sendRaw().catch(() => {});
+    }, 3000);
+
+    let conf;
+    try {
+      conf = await connection.confirmTransaction(
+        { signature: id, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+    } finally {
+      clearInterval(retryTimer);
+    }
 
     if (conf.value.err) {
       const txData = await connection.getTransaction(id, {
