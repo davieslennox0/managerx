@@ -29,12 +29,15 @@ function base58ToHex(str) {
 }
 
 function ConfirmModal({ action, onConfirm, onCancel }) {
+  const isBridge = action.action === 'bridge';
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#00000080', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div style={{ background: '#12121A', border: '1px solid #C9A84C30', borderRadius: 12, padding: 28, maxWidth: 340, width: '90%', fontFamily: 'Georgia, serif' }}>
-        <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.2em', marginBottom: 16 }}>CONFIRM TRADE</div>
+        <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.2em', marginBottom: 16 }}>{isBridge ? 'CONFIRM BRIDGE' : 'CONFIRM TRADE'}</div>
         <div style={{ fontSize: 13, color: '#E8DCC8', marginBottom: 8 }}>
-          <strong>{action.action?.toUpperCase()}</strong> {action.symbol}
+          {isBridge
+            ? <><strong>BRIDGE</strong> ${action.amount} USDC Sui → Solana</>
+            : <><strong>{action.action?.toUpperCase()}</strong> {action.symbol}</>}
         </div>
         <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
           Amount: ${action.amount} USD
@@ -221,6 +224,20 @@ export default function Chat({ user, chain }) {
           });
           suiTxHash = result.digest;
           console.log('CCTP burn confirmed (sponsored):', suiTxHash);
+
+          // Bridge: receive USDC on Solana and transfer to user's wallet (no trade)
+          if (action.action === 'bridge') {
+            setMessages(prev => [...prev, { role: 'assistant', content: `🔄 $${action.amount} USDC burned on Sui. Bridging to Solana (30–60s)...` }]);
+            const { data: bridgeData } = await axios.post('/api/trade/bridge-to-solana', {
+              suiTxHash,
+              rawAmount: Math.round(action.amount * 1e6),
+            }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `✅ $${action.amount} USDC bridged to your Solana wallet!\n\n**Tx:** ${bridgeData.mintTxHash?.slice(0, 10)}...`,
+            }]);
+            return;
+          }
         }
       }
 

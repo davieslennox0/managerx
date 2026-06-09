@@ -89,6 +89,8 @@ When the user wants to trade, respond with your analysis AND include this EXACT 
 \`\`\`json
 {"action": "buy", "symbol": "AAPLX", "amount": 100, "currency": "usd"}
 \`\`\`
+For sell: {"action": "sell", "symbol": "TSLAx", "amount": 50, "currency": "usd"}
+For bridge (move USDC from Sui to Solana without trading): {"action": "bridge", "amount": 1, "currency": "usd"}
 CRITICAL: Always wrap the JSON in triple backticks with json tag. Never output raw JSON without backticks.
 
 Keep responses concise. Always confirm before executing large trades.`;

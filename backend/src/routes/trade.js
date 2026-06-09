@@ -421,6 +421,103 @@ router.post('/build-burn', async (req, res) => {
   }
 });
 
+// Bridge USDC from Sui → Solana and forward it to the user's own Solana USDC wallet.
+// The frontend has already burned USDC on Sui (to agent ATA); this completes the receive
+// and then transfers the USDC from the agent ATA to the user's personal ATA.
+router.post('/bridge-to-solana', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user.sol_address) return res.status(400).json({ error: 'No Solana address on account' });
+
+  const { suiTxHash, rawAmount } = req.body;
+  if (!suiTxHash) return res.status(400).json({ error: 'Missing suiTxHash' });
+  if (!rawAmount)  return res.status(400).json({ error: 'Missing rawAmount' });
+
+  try {
+    const { pollAttestation } = require('../lib/cctp');
+    const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
+    const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
+    const { ethers } = require('ethers');
+    const { PublicKey, Keypair, Transaction: SolTx } = require('@solana/web3.js');
+    const {
+      getOrCreateAssociatedTokenAccount,
+      createTransferInstruction,
+      TOKEN_PROGRAM_ID,
+    } = require('@solana/spl-token');
+    const bs58 = require('bs58');
+    const { withFallback } = require('../lib/solana_connection');
+
+    const USDC_MINT   = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+    const agentKeypair = Keypair.fromSecretKey(bs58.default.decode(process.env.AGENT_SOL_PRIVATE_KEY));
+    const agentUsdcATA = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+    const userSolPubkey = new PublicKey(user.sol_address);
+
+    // Step 1: Extract CCTP message from Sui burn tx
+    const suiClient = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
+    const txData = await suiClient.getTransactionBlock({ digest: suiTxHash, options: { showEvents: true } });
+    const messageEvent = txData.events?.find(e => e.type.includes('MessageSent'));
+    if (!messageEvent) throw new Error('No MessageSent event in burn tx');
+    const messageBytes = messageEvent.parsedJson?.message;
+    if (!messageBytes) throw new Error('No message bytes in MessageSent event');
+
+    const messageHex  = '0x' + Buffer.from(messageBytes).toString('hex');
+    const messageHash = ethers.keccak256(messageHex);
+
+    // Step 2: Poll Circle attestation
+    console.log('bridge-to-solana: polling attestation...');
+    const attestation = await pollAttestation(messageHash);
+
+    // Step 3: Mint USDC on Solana (to agent ATA)
+    console.log('bridge-to-solana: minting USDC on Solana...');
+    const mintResult = await receiveMessageOnSolana(messageHex, attestation);
+
+    // Step 4: Transfer USDC from agent ATA to user's Solana USDC ATA
+    console.log('bridge-to-solana: transferring USDC to user', user.sol_address);
+    const transferTxHash = await withFallback(async (connection) => {
+      const userATA = await getOrCreateAssociatedTokenAccount(
+        connection,
+        agentKeypair,
+        USDC_MINT,
+        userSolPubkey,
+        false,
+        'confirmed',
+        undefined,
+        TOKEN_PROGRAM_ID,
+      );
+
+      const ix = createTransferInstruction(
+        agentUsdcATA,
+        userATA.address,
+        agentKeypair.publicKey,
+        BigInt(rawAmount),
+        [],
+        TOKEN_PROGRAM_ID,
+      );
+
+      const { blockhash } = await connection.getLatestBlockhash('confirmed');
+      const tx = new SolTx({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
+      tx.add(ix);
+      tx.sign(agentKeypair);
+
+      const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
+      await connection.confirmTransaction(sig, 'confirmed');
+      console.log('bridge-to-solana: transfer complete', sig);
+      return sig;
+    });
+
+    res.json({
+      ok: true,
+      mintTxHash: mintResult.txHash,
+      transferTxHash,
+      amount: rawAmount / 1e6,
+      message: `$${(rawAmount / 1e6).toFixed(2)} USDC bridged to your Solana wallet`,
+    });
+  } catch (e) {
+    console.error('bridge-to-solana error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Check agent's Solana USDC balance and bridge any amount to the user's Sui wallet.
 // Useful for recovering USDC that got stuck in the agent wallet from a failed/incomplete bridge.
 router.post('/recover-solana-usdc', async (req, res) => {
