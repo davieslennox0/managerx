@@ -78,11 +78,7 @@ export default function Portfolio({ user, chain }) {
 
       <div style={{ padding: '24px 28px' }}>
         {/* Top cards */}
-        <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-          <div style={{ flex: 1, background: '#0E0E14', borderRadius: 12, padding: '18px 20px', border: '1px solid #1C1C22' }}>
-            <div style={{ fontSize: 9, color: '#3A3A40', letterSpacing: '0.2em', marginBottom: 8 }}>USDC BALANCE</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#C9A84C' }}>${portfolio?.usdcBalance?.toFixed(2) || '0.00'}</div>
-          </div>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
           <div style={{ flex: 1, background: '#0E0E14', borderRadius: 12, padding: '18px 20px', border: '1px solid #1C1C22' }}>
             <div style={{ fontSize: 9, color: '#3A3A40', letterSpacing: '0.2em', marginBottom: 8 }}>PORTFOLIO VALUE</div>
             <div style={{ fontSize: 24, fontWeight: 700, color: '#E8DCC8' }}>${totalValue.toFixed(2)}</div>
@@ -91,6 +87,28 @@ export default function Portfolio({ user, chain }) {
             <div style={{ fontSize: 9, color: '#3A3A40', letterSpacing: '0.2em', marginBottom: 8 }}>WALLET</div>
             <div style={{ fontSize: 10, fontFamily: 'monospace', color: '#888' }}>{address?.slice(0, 14) || 'Not connected'}…</div>
             <div style={{ fontSize: 9, color: '#C9A84C', marginTop: 6, letterSpacing: '0.1em' }}>+ DEPOSIT →</div>
+          </div>
+        </div>
+
+        {/* Chain balances */}
+        <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+          <div style={{ flex: 1, background: '#0E0E14', borderRadius: 12, padding: '18px 20px', border: '1px solid #1C1C22' }}>
+            <div style={{ fontSize: 9, color: '#3A3A40', letterSpacing: '0.2em', marginBottom: 12 }}>SUI</div>
+            <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.15em', marginBottom: 4 }}>USDC</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#C9A84C' }}>${(portfolio?.suiUsdcBalance ?? portfolio?.usdcBalance ?? 0).toFixed(2)}</div>
+          </div>
+          <div style={{ flex: 1, background: '#0E0E14', borderRadius: 12, padding: '18px 20px', border: '1px solid #1C1C22' }}>
+            <div style={{ fontSize: 9, color: '#3A3A40', letterSpacing: '0.2em', marginBottom: 12 }}>SOLANA</div>
+            <div style={{ display: 'flex', gap: 20 }}>
+              <div>
+                <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.15em', marginBottom: 4 }}>SOL</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#9945FF' }}>{(portfolio?.solNativeBalance ?? 0).toFixed(4)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 9, color: '#555', letterSpacing: '0.15em', marginBottom: 4 }}>USDC</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#C9A84C' }}>${(portfolio?.solUsdcBalance ?? 0).toFixed(2)}</div>
+              </div>
+            </div>
           </div>
         </div>
 

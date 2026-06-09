@@ -42,6 +42,7 @@ router.get('/:chain', async (req, res) => {
         usdcBalance: (suiPortfolio.usdcBalance || 0) + (solPortfolio.usdcBalance || 0),
         suiUsdcBalance: suiPortfolio.usdcBalance || 0,
         solUsdcBalance: solPortfolio.usdcBalance || 0,
+        solNativeBalance: solPortfolio.solBalance || 0,
         positions: solPortfolio.positions || [],
       };
     }

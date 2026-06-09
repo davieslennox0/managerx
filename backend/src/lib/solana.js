@@ -132,7 +132,8 @@ async function getSolPortfolio(solAddress, userId) {
         console.error('Token fetch error:', e.message);
       }
 
-      return { chain: 'solana', address: solAddress, usdcBalance, positions };
+      const solBalance = await connection.getBalance(pubkey) / 1e9;
+      return { chain: 'solana', address: solAddress, usdcBalance, solBalance, positions };
     });
   } catch (e) {
     console.error('SOL portfolio error:', e.message);
