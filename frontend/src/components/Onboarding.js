@@ -19,7 +19,9 @@ export default function Onboarding() {
           Trade tokenized xStocks on Sui.<br />
           Powered by AI. Non-custodial.
         </div>
-        <DynamicWidget />
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <DynamicWidget />
+        </div>
         <div style={{ fontSize: 9, color: '#222', marginTop: 24, letterSpacing: '0.1em' }}>
           SOLANA · SUI · POWERED BY AI
         </div>

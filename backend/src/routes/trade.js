@@ -303,8 +303,8 @@ router.post('/execute', async (req, res) => {
     }
 
     // Record transaction
-    db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(uuid(), user.id, chain, type, symbol, shares, price, total, txHash);
+    db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), user.id, chain, type, symbol, shares, price, total, txHash, 'success');
 
     // Store immutable trade receipt on Walrus (non-blocking — don't await)
     storeTradeReceipt({
@@ -328,6 +328,15 @@ router.post('/execute', async (req, res) => {
 
   } catch (e) {
     console.error('Trade error:', e);
+    // Record the failed trade attempt so it shows in activity history
+    try {
+      const sym = symbol?.replace('X', '').replace('x', '').toUpperCase();
+      const priceData = sym ? await getPrice(sym).catch(() => null) : null;
+      const failPrice = parseFloat(priceData?.price || 0);
+      const failShares = (currency === 'usd' && failPrice) ? amount / failPrice : (amount || 0);
+      db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(uuid(), user.id, chain, type, symbol, failShares, failPrice, failShares * failPrice, null, 'failed', e.message?.slice(0, 200));
+    } catch (_) {}
     res.status(500).json({ error: e.message });
   }
 });

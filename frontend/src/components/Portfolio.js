@@ -34,6 +34,7 @@ export default function Portfolio({ user, chain }) {
   const [tab, setTab] = useState('positions');
   const [showDeposit, setShowDeposit] = useState(false);
   const [txHistory, setTxHistory] = useState([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const token = localStorage.getItem('managerx_token');
 
   useEffect(() => {
@@ -46,6 +47,15 @@ export default function Portfolio({ user, chain }) {
       setPrices(px.data);
     }).catch(console.error).finally(() => setLoading(false));
   }, [chain]);
+
+  useEffect(() => {
+    if (tab !== 'activity') return;
+    setActivityLoading(true);
+    axios.get('/api/trade/history', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => setTxHistory(r.data.transactions || []))
+      .catch(console.error)
+      .finally(() => setActivityLoading(false));
+  }, [tab]);
 
   const address = user.suiAddress;
 
@@ -153,22 +163,82 @@ export default function Portfolio({ user, chain }) {
 
         {tab === 'activity' && (
           <div style={{ background: '#0E0E14', borderRadius: 12, border: '1px solid #1C1C22', overflow: 'hidden' }}>
-            {!txHistory.length ? (
+            {activityLoading ? (
+              <div style={{ padding: '48px 22px', textAlign: 'center', color: '#3A3A40', fontSize: 11, letterSpacing: '0.15em' }}>
+                LOADING ACTIVITY…
+              </div>
+            ) : !txHistory.length ? (
               <div style={{ padding: '48px 22px', textAlign: 'center', color: '#3A3A40', fontSize: 12, fontStyle: 'italic' }}>
-                No transactions yet.
+                No transactions yet.<br />Start trading in the chat.
               </div>
-            ) : txHistory.map((tx, i) => (
-              <div key={i} style={{ padding: '14px 20px', borderBottom: '1px solid #12121A', display: 'flex', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ fontSize: 11, color: tx.type === 'buy' ? '#4A8A5A' : '#8A4A4A', letterSpacing: '0.1em' }}>{tx.type?.toUpperCase()} {tx.symbol}</div>
-                  <div style={{ fontSize: 10, color: '#3A3A40', marginTop: 2 }}>{tx.shares} shares @ ${tx.price?.toFixed(2)}</div>
+            ) : txHistory.map((tx, i) => {
+              const success = tx.status !== 'failed';
+              const isBuy = tx.type === 'buy';
+              const accentColor = success ? (isBuy ? '#3DBA6F' : '#E8DCC8') : '#D05050';
+              const bgColor = success ? (isBuy ? '#0D1A12' : '#141414') : '#1A0D0D';
+              const borderColor = success ? (isBuy ? '#1A3A2A' : '#1C1C22') : '#3A1515';
+              const date = tx.created_at ? new Date(tx.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+              return (
+                <div key={tx.id || i} style={{
+                  padding: '16px 20px',
+                  borderBottom: '1px solid #12121A',
+                  background: bgColor,
+                  borderLeft: `3px solid ${borderColor}`,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  transition: 'background 0.15s',
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, letterSpacing: '0.15em',
+                        padding: '3px 8px', borderRadius: 4,
+                        background: success ? (isBuy ? '#1A3A2A' : '#1C1C28') : '#2A1010',
+                        color: accentColor,
+                      }}>
+                        {tx.type?.toUpperCase()}
+                      </span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#E8DCC8' }}>{tx.symbol}</span>
+                      <span style={{
+                        fontSize: 9, letterSpacing: '0.1em',
+                        padding: '2px 7px', borderRadius: 3,
+                        background: success ? '#0D200D' : '#200D0D',
+                        color: success ? '#3DBA6F' : '#D05050',
+                        border: `1px solid ${success ? '#1A3A1A' : '#3A1A1A'}`,
+                      }}>
+                        {success ? '✓ SUCCESS' : '✗ FAILED'}
+                      </span>
+                    </div>
+                    {success ? (
+                      <div style={{ fontSize: 10, color: '#555', marginBottom: 4 }}>
+                        {tx.shares?.toFixed(6)} shares · ${tx.price?.toFixed(2)} per share
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 10, color: '#6A2A2A', marginBottom: 4, fontStyle: 'italic' }}>
+                        {tx.error || 'Trade execution failed'}
+                      </div>
+                    )}
+                    {tx.tx_hash && (
+                      <div style={{ fontSize: 9, color: '#2C2C34', fontFamily: 'monospace', letterSpacing: '0.05em' }}>
+                        {tx.tx_hash.slice(0, 18)}…{tx.tx_hash.slice(-6)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right', minWidth: 90 }}>
+                    {success && (
+                      <div style={{ fontSize: 14, fontWeight: 700, color: accentColor, marginBottom: 4 }}>
+                        ${tx.total?.toFixed(2)}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 9, color: '#2C2C34', letterSpacing: '0.05em' }}>{date}</div>
+                    <div style={{ fontSize: 9, color: '#2C2C34', marginTop: 2, letterSpacing: '0.1em' }}>
+                      {tx.chain?.toUpperCase()}
+                    </div>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 11, color: '#888' }}>${tx.total?.toFixed(2)}</div>
-                  <div style={{ fontSize: 9, color: '#2A2A2A', marginTop: 2, fontFamily: 'monospace' }}>{tx.tx_hash?.slice(0, 10)}…</div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

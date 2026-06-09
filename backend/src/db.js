@@ -45,9 +45,19 @@ db.exec(`
     price REAL,
     total REAL,
     tx_hash TEXT,
+    status TEXT DEFAULT 'success',
+    error TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+// Migrate existing transactions table to add status/error columns if missing
+try {
+  db.exec(`ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'success'`);
+} catch (_) {}
+try {
+  db.exec(`ALTER TABLE transactions ADD COLUMN error TEXT`);
+} catch (_) {}
 
 module.exports = db;
 
