@@ -185,14 +185,18 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
     const MIN_SOL_FOR_CCTP = 4_000_000;
     let effectiveUsdcAmount = rawUsdcAmount;
     if (agentSolBalance < MIN_SOL_FOR_CCTP) {
-      const TARGET_SOL = 10_000_000;
-      const neededLamports = TARGET_SOL - agentSolBalance;
       console.log(`Agent SOL low (${(agentSolBalance/1e9).toFixed(6)}), swapping USDC → SOL for gas...`);
       try {
         const USDC_MINT_ADDR = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
         const WSOL_MINT_ADDR = 'So11111111111111111111111111111111111111112';
+        // ExactIn with a fixed $1.50 USDC input (~0.01 SOL at $150/SOL, well above the 0.004 minimum).
+        // ExactOut was failing: Jupiter's computed input often exceeded the available balance.
+        const TOPUP_USDC = 1_500_000; // 1.50 USDC
+        const usdcAvail = parseInt((await connection.getTokenAccountBalance(burnTokenAccount)).value.amount, 10);
+        const swapInputUsdc = Math.min(TOPUP_USDC, Math.floor(usdcAvail * 0.5));
+        if (swapInputUsdc < 100_000) throw new Error(`insufficient USDC for SOL topup (${(usdcAvail/1e6).toFixed(6)} USDC available)`);
         const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
-          params: { inputMint: USDC_MINT_ADDR, outputMint: WSOL_MINT_ADDR, amount: neededLamports, swapMode: 'ExactOut', slippageBps: 100 },
+          params: { inputMint: USDC_MINT_ADDR, outputMint: WSOL_MINT_ADDR, amount: swapInputUsdc, swapMode: 'ExactIn', slippageBps: 100 },
           timeout: 10_000,
         });
         const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
@@ -200,12 +204,12 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
           userPublicKey: agentKeypair.publicKey.toString(),
           wrapAndUnwrapSol: true,
           dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: 1000,
+          prioritizationFeeLamports: 100_000,
         }, { timeout: 15_000 });
         const { VersionedTransaction } = require('@solana/web3.js');
         const swapTx = VersionedTransaction.deserialize(Buffer.from(swapRes.data.swapTransaction, 'base64'));
         swapTx.sign([agentKeypair]);
-        const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: false });
+        const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: true, maxRetries: 0 });
         await connection.confirmTransaction(sig, 'confirmed');
         console.log(`SOL topup complete: ${sig}`);
         const usdcInfo = await connection.getTokenAccountBalance(burnTokenAccount);

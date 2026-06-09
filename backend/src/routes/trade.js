@@ -365,9 +365,10 @@ router.post('/recover-solana-usdc', async (req, res) => {
 
   try {
     const { getConnection: _getSolConn } = require('../lib/solana_connection');
+    const { PublicKey: _PublicKey } = require('@solana/web3.js');
     const connection = _getSolConn();
 
-    const usdcATA = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+    const usdcATA = new _PublicKey(process.env.AGENT_SOL_USDC_ATA);
     const balanceInfo = await connection.getTokenAccountBalance(usdcATA);
     const rawBalance = parseInt(balanceInfo.value.amount, 10);
 
