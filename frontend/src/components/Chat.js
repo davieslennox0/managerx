@@ -63,6 +63,8 @@ export default function Chat({ user, chain }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
+  const [gasApprovalNeeded, setGasApprovalNeeded] = useState(false);
+  const [pendingRetry, setPendingRetry] = useState(null);
   const token = localStorage.getItem('managerx_token');
 
   useEffect(() => {
@@ -244,12 +246,103 @@ export default function Chat({ user, chain }) {
       setMessages(prev => [...prev, successMsg]);
 
     } catch (e) {
+      const errCode = e.response?.data?.error;
+      if (errCode === 'GAS_INSUFFICIENT') {
+        setPendingRetry(action);
+        setGasApprovalNeeded(true);
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `⚠️ Your Solana wallet needs gas fees ($0.50 USDC) to process this transaction. Approve transferring $1 USDC from Sui to Solana to fund it?`,
+        }]);
+        return;
+      }
       const rootMsg = e.cause?.cause?.message || e.cause?.message || e.response?.data?.error || e.message;
       console.error('Trade error:', e, 'cause:', e.cause);
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: `❌ Trade failed: ${rootMsg}`,
       }]);
+    }
+  };
+
+  const handleGasTopup = async () => {
+    setGasApprovalNeeded(false);
+    setLoading(true);
+    try {
+      let suiWallet = userWallets?.find(w => isSuiWallet(w));
+      if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) suiWallet = primaryWallet;
+      if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
+
+      const suiAddress = suiWallet.address || user.suiAddress;
+      const amountMist = BigInt(1_000_000); // $1 USDC
+      const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
+
+      const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
+      const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
+      if (!coins.data.length) throw new Error('No USDC in your Sui wallet');
+      const totalBalance = coins.data.reduce((a, c) => a + BigInt(c.balance), 0n);
+      if (totalBalance < amountMist) throw new Error(`Need $1 USDC in Sui wallet (have $${(Number(totalBalance)/1e6).toFixed(2)})`);
+
+      const tx = new Transaction();
+      const primaryCoin = tx.object(coins.data[0].coinObjectId);
+      if (coins.data.length > 1) tx.mergeCoins(primaryCoin, coins.data.slice(1).map(c => tx.object(c.coinObjectId)));
+      let coinArg;
+      if (totalBalance === amountMist) { coinArg = primaryCoin; }
+      else { [coinArg] = tx.splitCoins(primaryCoin, [amountMist]); }
+
+      tx.moveCall({
+        target: `${CCTP.TOKEN_MESSENGER_MINTER}::deposit_for_burn::deposit_for_burn`,
+        typeArguments: [CCTP.USDC_TYPE],
+        arguments: [
+          coinArg,
+          tx.pure.u32(CCTP.SOLANA_DOMAIN),
+          tx.pure.address(mintRecipientHex),
+          tx.object(CCTP.TOKEN_MESSENGER_STATE),
+          tx.object(CCTP.MESSAGE_TRANSMITTER_STATE),
+          tx.object(CCTP.DENY_LIST),
+          tx.object(CCTP.USDC_TREASURY),
+        ],
+      });
+
+      const txKindBytes = Buffer.from(await tx.build({ client: suiClient, onlyTransactionKind: true })).toString('base64');
+
+      const { data: sponsored } = await axios.post('/api/trade/sponsor-sui-tx', {
+        txKindBytes, senderAddress: suiAddress,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+
+      const sponsoredTxBytes = Uint8Array.from(atob(sponsored.txBytes), c => c.charCodeAt(0));
+      const connector = suiWallet._connector;
+      if (!connector) throw new Error('Sui wallet connector not found');
+      await connector.connect();
+      if (connector.setActiveAccountAddress) connector.setActiveAccountAddress(suiAddress);
+      const signedTx = await connector.signTransaction(Transaction.from(sponsoredTxBytes));
+
+      const result = await suiClient.executeTransactionBlock({
+        transactionBlock: signedTx.bytes,
+        signature: [signedTx.signature, sponsored.agentSignature],
+      });
+      const suiTxHash = result.digest;
+      console.log('Gas bridge burn confirmed:', suiTxHash);
+
+      setMessages(prev => [...prev, { role: 'assistant', content: '🔄 $1 transfer submitted. Bridging to Solana (30–60s)...' }]);
+
+      await axios.post('/api/trade/bridge-for-gas', { suiTxHash }, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 120000,
+      });
+
+      const retry = pendingRetry;
+      setPendingRetry(null);
+      setMessages(prev => [...prev, { role: 'assistant', content: '✅ Gas funded! Retrying your trade...' }]);
+      if (retry) {
+        setPendingAction(retry);
+      }
+    } catch (e) {
+      const msg = e.response?.data?.error || e.message;
+      setMessages(prev => [...prev, { role: 'assistant', content: `❌ Gas transfer failed: ${msg}` }]);
+      setPendingRetry(null);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -308,6 +401,22 @@ export default function Chat({ user, chain }) {
               : m.content}
           </div>
         ))}
+        {gasApprovalNeeded && !loading && (
+          <div style={{ alignSelf: 'flex-start', display: 'flex', gap: 8, marginTop: 4 }}>
+            <button
+              onClick={handleGasTopup}
+              style={{ padding: '8px 16px', background: '#C9A84C', border: 'none', color: '#0C0C10', borderRadius: 6, cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: 'Georgia, serif', letterSpacing: '0.1em' }}
+            >
+              APPROVE $1 TRANSFER
+            </button>
+            <button
+              onClick={() => { setGasApprovalNeeded(false); setPendingRetry(null); }}
+              style={{ padding: '8px 16px', background: 'none', border: '1px solid #1C1C22', color: '#555', borderRadius: 6, cursor: 'pointer', fontSize: 10, fontFamily: 'Georgia, serif' }}
+            >
+              CANCEL
+            </button>
+          </div>
+        )}
         {loading && (
           <div style={{ alignSelf: 'flex-start', color: '#C9A84C', fontSize: 10, letterSpacing: '0.2em', fontFamily: 'Georgia, serif' }}>
             THINKING...

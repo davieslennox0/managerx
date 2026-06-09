@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, transferXStockToUser, estimateGasCostUsdc, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, transferXStockToUser, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -90,6 +90,47 @@ router.post('/submit-sell-transfer', async (req, res) => {
   }
 });
 
+// Receive a Sui→Solana USDC bridge (by suiTxHash) and convert $0.50 to SOL for gas.
+// Called by the frontend after the user approves a $1 gas-topup bridge from Sui.
+router.post('/bridge-for-gas', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { suiTxHash } = req.body;
+  if (!suiTxHash) return res.status(400).json({ error: 'Missing suiTxHash' });
+
+  try {
+    const { pollAttestation } = require('../lib/cctp');
+    const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
+    const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
+    const { ethers } = require('ethers');
+
+    const client = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
+    const txData = await client.getTransactionBlock({ digest: suiTxHash, options: { showEvents: true } });
+
+    const messageEvent = txData.events?.find(e => e.type.includes('MessageSent'));
+    if (!messageEvent) throw new Error('No MessageSent event in burn tx');
+    const messageBytes = messageEvent.parsedJson?.message;
+    if (!messageBytes) throw new Error('No message bytes in MessageSent event');
+
+    const messageHex  = '0x' + Buffer.from(messageBytes).toString('hex');
+    const messageHash = ethers.keccak256(messageHex);
+
+    console.log('bridge-for-gas: polling attestation...');
+    const attestation = await pollAttestation(messageHash);
+    console.log('bridge-for-gas: minting USDC on Solana...');
+    await receiveMessageOnSolana(messageHex, attestation);
+
+    console.log('bridge-for-gas: topping up SOL from USDC...');
+    await topUpGasFromUsdc();
+
+    res.json({ ok: true, message: 'Gas funded. You can now proceed with your trade.' });
+  } catch (e) {
+    console.error('bridge-for-gas error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post('/execute', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -132,20 +173,28 @@ router.post('/execute', async (req, res) => {
 
           const rawAmount = Math.round(shares * 1e6);
 
+          // Gas check: ensure agent has SOL before swap. Auto-tops up from USDC if possible.
+          const gasStatus = await ensureGas();
+          if (!gasStatus.ok) {
+            return res.status(402).json({
+              error: 'GAS_INSUFFICIENT',
+              needsBridge: true,
+              solBalance: gasStatus.solBalance,
+              usdcBalance: gasStatus.usdcBalance,
+            });
+          }
+
           // Step 1: Swap xStock → USDC via Jupiter (agent wallet)
           console.log('Sell Step 1: Jupiter xStock → USDC');
           const swapResult = await jupiterSwapXStockToUsdc(mintAddress, rawAmount);
           txHash = swapResult.txHash;
           console.log('Swap complete:', txHash, '→', swapResult.usdcAmount, 'USDC');
 
-          // Deduct gas for swap tx + bridge burn tx from the USDC output before bridging.
-          const sellGasCostUsdc = await estimateGasCostUsdc(2);
-          const sellGasCostRaw  = Math.round(sellGasCostUsdc * 1e6);
           const feeBps = parseInt(process.env.PLATFORM_FEE_BPS || '0');
           const sellFeeRaw = Math.round(swapResult.rawUsdcAmount * feeBps / 10000);
-          const bridgeRaw = Math.max(swapResult.rawUsdcAmount - sellGasCostRaw - sellFeeRaw, 0);
-          if (bridgeRaw <= 0) throw new Error(`Sell proceeds too small to cover gas fees (~$${sellGasCostUsdc.toFixed(4)})`);
-          console.log(`Sell deductions: gas=$${sellGasCostUsdc.toFixed(4)} fee=$${(sellFeeRaw/1e6).toFixed(4)} → bridging ${(bridgeRaw/1e6).toFixed(6)} USDC`);
+          const bridgeRaw = Math.max(swapResult.rawUsdcAmount - sellFeeRaw, 0);
+          if (bridgeRaw <= 0) throw new Error('Sell proceeds too small to bridge');
+          console.log(`Sell fee: $${(sellFeeRaw/1e6).toFixed(4)} → bridging ${(bridgeRaw/1e6).toFixed(6)} USDC`);
 
           // Step 2: Bridge USDC Solana → Sui (burn on Solana, attest, mint on Sui)
           console.log('Sell Step 2: Bridging USDC Solana → Sui for', userSuiAddress);
@@ -194,8 +243,17 @@ router.post('/execute', async (req, res) => {
           console.log('Step 3: Minting on Solana...');
           await receiveMessageOnSolana(messageHex, attestation);
 
-          // Step 4: Swap on Jupiter
-          console.log('Step 4: Swapping on Jupiter...');
+          // Step 4: Swap on Jupiter (gas check first — USDC is now in agent wallet)
+          console.log('Step 4: Checking gas + swapping on Jupiter...');
+          const gasStatus = await ensureGas();
+          if (!gasStatus.ok) {
+            return res.status(402).json({
+              error: 'GAS_INSUFFICIENT',
+              needsBridge: true,
+              solBalance: gasStatus.solBalance,
+              usdcBalance: gasStatus.usdcBalance,
+            });
+          }
           const swap = await jupiterSwap(process.env.AGENT_SOL_ADDRESS, symbol, usdcAmount);
           txHash = swap.txHash;
           console.log('Swap complete:', txHash);

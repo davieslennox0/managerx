@@ -4,6 +4,14 @@ const bs58 = require('bs58');
 const { withFallback } = require('./solana_connection');
 
 const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+
+// Gas management: keep 0.001 SOL on hand; top up with $0.50 USDC when low.
+// NOTE: the very first CCTP receive on Solana requires an initial ~0.005 SOL
+// seed from the platform. After that this system is self-sustaining.
+const GAS_MIN_LAMPORTS  = 1_000_000; // 0.001 SOL — trigger top-up below this
+const GAS_TOPUP_USDC   = 0.50;      // swap $0.50 USDC → SOL on each top-up
+const GAS_SWAP_MIN_SOL = 5_000;     // minimum SOL needed to pay for the topup swap itself
 
 // Full verified xStock mint addresses — official Solana case study Aug 2025
 const XSTOCK_MINTS = {
@@ -82,21 +90,84 @@ function getConnection() {
   return require('./solana_connection').getConnection();
 }
 
-// Returns estimated gas cost in USDC for N Solana transactions.
-// Uses Jupiter price API for live SOL price; falls back to $150 if unavailable.
+// Returns { solBalance (lamports), usdcBalance (USD) } for the agent wallet.
+async function getAgentGasStatus() {
+  const agentKeypair = getAgentKeypair();
+  return withFallback(async (connection) => {
+    const solBalance = await connection.getBalance(agentKeypair.publicKey);
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(agentKeypair.publicKey, {
+      mint: new PublicKey(USDC_SOL),
+    });
+    const usdcBalance = tokenAccounts.value.reduce((acc, a) =>
+      acc + (a.account.data.parsed.info.tokenAmount.uiAmount || 0), 0
+    );
+    return { solBalance, usdcBalance };
+  });
+}
+
+// Swap $0.50 USDC → native SOL via Jupiter. Requires at least GAS_SWAP_MIN_SOL lamports.
+async function topUpGasFromUsdc() {
+  const agentKeypair = getAgentKeypair();
+  const amountLamports = Math.round(GAS_TOPUP_USDC * 1e6);
+
+  const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
+    params: { inputMint: USDC_SOL, outputMint: WSOL_MINT, amount: amountLamports, slippageBps: 100 },
+  });
+
+  const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
+    quoteResponse: quoteRes.data,
+    userPublicKey: agentKeypair.publicKey.toBase58(),
+    wrapAndUnwrapSol: true,
+    prioritizationFeeLamports: 'auto',
+    dynamicComputeUnitLimit: true,
+  });
+
+  const buf = Buffer.from(swapRes.data.swapTransaction, 'base64');
+  const tx = VersionedTransaction.deserialize(buf);
+  tx.sign([agentKeypair]);
+
+  return withFallback(async (connection) => {
+    const id = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 });
+    const conf = await connection.confirmTransaction(id, 'confirmed');
+    if (conf.value.err) throw new Error(`USDC→SOL gas topup failed: ${JSON.stringify(conf.value.err)}`);
+    console.log('Gas topped up from USDC:', id);
+    return id;
+  });
+}
+
+// Ensure the agent wallet has enough SOL for gas.
+// Returns { ok: true } or { ok: false, needsBridge: true, solBalance, usdcBalance }.
+async function ensureGas() {
+  const status = await getAgentGasStatus();
+
+  if (status.solBalance >= GAS_MIN_LAMPORTS) return { ok: true };
+
+  console.log(`Low gas: ${status.solBalance} lamports, $${status.usdcBalance.toFixed(4)} USDC`);
+
+  if (status.solBalance >= GAS_SWAP_MIN_SOL && status.usdcBalance >= GAS_TOPUP_USDC) {
+    try {
+      await topUpGasFromUsdc();
+      return { ok: true };
+    } catch (e) {
+      console.error('Gas auto-topup failed:', e.message);
+    }
+  }
+
+  return { ok: false, needsBridge: true, solBalance: status.solBalance, usdcBalance: status.usdcBalance };
+}
+
+// Kept for external callers (sell deduction in trade.js) but no longer used internally.
 async function estimateGasCostUsdc(numTxs = 1) {
-  const LAMPORTS_PER_TX = 25_000; // conservative estimate incl. priority fee
+  const LAMPORTS_PER_TX = 25_000;
   try {
     const res = await axios.get('https://api.jup.ag/price/v2', {
-      params: { ids: 'So11111111111111111111111111111111111111112' },
+      params: { ids: WSOL_MINT },
       timeout: 3000,
     });
-    const solPrice = parseFloat(res.data?.data?.['So11111111111111111111111111111111111111112']?.price || 0);
-    if (solPrice > 0) {
-      return (LAMPORTS_PER_TX * numTxs / 1e9) * solPrice;
-    }
+    const solPrice = parseFloat(res.data?.data?.[WSOL_MINT]?.price || 0);
+    if (solPrice > 0) return (LAMPORTS_PER_TX * numTxs / 1e9) * solPrice;
   } catch {}
-  return (LAMPORTS_PER_TX * numTxs / 1e9) * 150; // fallback at $150/SOL
+  return (LAMPORTS_PER_TX * numTxs / 1e9) * 150;
 }
 
 async function getSolPortfolio(solAddress, userId) {
@@ -147,13 +218,7 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
   const mint = XSTOCK_MINTS[canonical];
   if (!mint) throw new Error(`Unknown xStock: ${symbol}`);
 
-  // Deduct estimated gas (swap tx + xStock transfer tx) from USDC before quoting.
-  const gasCostUsdc = await estimateGasCostUsdc(2);
-  const effectiveUsdc = Math.max(usdcAmount - gasCostUsdc, 0);
-  if (effectiveUsdc <= 0) throw new Error(`Trade amount too small to cover gas fees (~$${gasCostUsdc.toFixed(4)})`);
-  console.log(`Gas deduction: $${gasCostUsdc.toFixed(4)} USDC → trading $${effectiveUsdc.toFixed(6)} of $${usdcAmount}`);
-
-  const amountLamports = Math.round(effectiveUsdc * 1e6);
+  const amountLamports = Math.round(usdcAmount * 1e6);
 
   const quoteRes = await axios.get('https://api.jup.ag/swap/v1/quote', {
     params: {
@@ -165,13 +230,14 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
   });
 
   const quote = quoteRes.data;
-
   const agentKeypair = getAgentKeypair();
 
   const swapRes = await axios.post('https://api.jup.ag/swap/v1/swap', {
     quoteResponse: quote,
-    userPublicKey: agentKeypair.publicKey.toBase58(),
+    userPublicKey: solAddress,
     wrapAndUnwrapSol: false,
+    prioritizationFeeLamports: 'auto',
+    dynamicComputeUnitLimit: true,
   });
 
   const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
@@ -234,6 +300,8 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
     quoteResponse: quote,
     userPublicKey: agentKeypair.publicKey.toBase58(),
     wrapAndUnwrapSol: false,
+    prioritizationFeeLamports: 'auto',
+    dynamicComputeUnitLimit: true,
   });
 
   const swapTransactionBuf = Buffer.from(swapRes.data.swapTransaction, 'base64');
@@ -428,10 +496,11 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
       TOKEN_2022_PROGRAM_ID
     );
 
-    const tx = new Transaction().add(transferIx);
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = agentKeypair.publicKey;
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
+    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }));
+    tx.add(transferIx);
 
     const txid = await connection.sendTransaction(tx, [agentKeypair], { maxRetries: 3 });
     await connection.confirmTransaction(txid, 'confirmed');
@@ -449,5 +518,8 @@ module.exports = {
   transferXStockToUser,
   estimateGasCostUsdc,
   getXStockPrice,
+  ensureGas,
+  topUpGasFromUsdc,
+  getAgentGasStatus,
   XSTOCK_MINTS,
 };
