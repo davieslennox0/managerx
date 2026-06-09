@@ -135,8 +135,8 @@ export default function Dashboard({ user, chain, onLogout, showTour, onTourDone,
           <div style={{ fontSize: 8, color: '#2A2A30', marginBottom: 10, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {user.suiAddress?.slice(0, 14) || 'No wallet'}…
           </div>
-          <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif', marginBottom: 4 }}>SIGN OUT</button>
-          
+          <div style={{ marginBottom: 4 }}><ExportKeyBtn /></div>
+          <button onClick={onLogout} style={{ fontSize: 8, color: '#333', border: '1px solid #1C1C22', background: 'none', cursor: 'pointer', padding: '5px 8px', borderRadius: 4, width: '100%', letterSpacing: '0.1em', fontFamily: 'Georgia, serif' }}>SIGN OUT</button>
         </div>
       </div>
 
