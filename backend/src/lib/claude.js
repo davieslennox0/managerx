@@ -46,10 +46,9 @@ async function chat({ messages, chain, portfolio }) {
 
   const crossChain = portfolio.crossChain;
   const crossChainSummary = crossChain ? `
-Cross-chain asset snapshot (all wallets, live):
-- Arbitrum${crossChain.arbitrum.address ? ` (${crossChain.arbitrum.address})` : ' (not connected)'}: $${crossChain.arbitrum.usdcBalance.toFixed(2)} USDC${crossChain.arbitrum.positions.length ? `, ${crossChain.arbitrum.positions.length} stock position(s)` : ''}
-- Solana${crossChain.solana.address ? ` (${crossChain.solana.address})` : ' (not connected)'}: $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}
-- Sui${crossChain.sui.address ? ` (${crossChain.sui.address})` : ' (not connected)'}: $${crossChain.sui.usdcBalance.toFixed(2)} USDC` : '';
+Wallet addresses (active platform — Sui + Solana only):
+- Sui address: ${crossChain.sui.address || 'not connected'} — $${crossChain.sui.usdcBalance.toFixed(2)} USDC
+- Solana address: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}` : '';
 
   // Strip crossChain from active portfolio before showing it (it's already in the summary above)
   const activePortfolio = { ...portfolio };
@@ -78,6 +77,7 @@ IMPORTANT INSTRUCTIONS:
 - CRITICAL: When a user asks to "sell all" or "sell everything", you MUST sell each position individually with a separate JSON action block per symbol. NEVER use "ALL" or any placeholder as a symbol — it is not a valid xStock. If the user has NVDAx and AAPLx, respond with two separate sell actions (one at a time), not a single "sell ALL" action.
 - CRITICAL BALANCE RULE: The "Current portfolio" block above is fetched LIVE from the blockchain every single message. It is always accurate. ALWAYS use usdcBalance from that block as the user's balance — never reference or repeat balance figures from earlier in the conversation, as those are stale. Before every buy, state the live usdcBalance from the portfolio context.
 - CRITICAL BALANCE RULE: When the user asks for their balance or portfolio, read it ONLY from the "Current portfolio" context above — never from chat history.
+- When the user asks for "my address" or "my wallet", show ONLY the Sui address (the primary deposit address). Never mention the Solana address or any Arbitrum address unless specifically asked.
 
 You help users:
 - Buy and sell tokenized stocks conversationally
