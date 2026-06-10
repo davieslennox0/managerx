@@ -436,7 +436,7 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, shares)
 // Receive a user-signed sell-transfer tx, countersign as fee payer, and submit.
 // blockhash + lastValidBlockHeight come from the build step so we can use the
 // block-height confirmation strategy (120s window instead of web3.js 30s default).
-async function countersignAndSubmitSellTransfer(userSignedTxBase64, blockhash, lastValidBlockHeight) {
+async function countersignAndSubmit(userSignedTxBase64, blockhash, lastValidBlockHeight, label = 'Transfer') {
   const txBytes = Buffer.from(userSignedTxBase64, 'base64');
   const tx = Transaction.from(txBytes);
   const agentKeypair = getAgentKeypair();
@@ -444,16 +444,12 @@ async function countersignAndSubmitSellTransfer(userSignedTxBase64, blockhash, l
   const serialized = tx.serialize();
 
   return withFallback(async (connection) => {
-    // maxRetries: 0 — we own the retry loop so the tx keeps being rebroadcast
-    // until it lands or the blockhash expires (prevents silent drop from mempool).
     const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
 
     const id = await sendRaw();
-    console.log('Sell transfer submitted:', id, '— confirming (up to 120s)...');
+    console.log(`${label} submitted:`, id, '— confirming (up to 120s)...');
 
-    const retryTimer = setInterval(() => {
-      sendRaw().catch(() => {});
-    }, 3000);
+    const retryTimer = setInterval(() => sendRaw().catch(() => {}), 3000);
 
     let conf;
     try {
@@ -471,10 +467,15 @@ async function countersignAndSubmitSellTransfer(userSignedTxBase64, blockhash, l
         maxSupportedTransactionVersion: 0,
       }).catch(() => null);
       const logs = txData?.meta?.logMessages?.join('\n') || '';
-      throw new Error(`Sell transfer failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+      throw new Error(`${label} failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
     }
     return id;
   });
+}
+
+// Keep old name as alias so existing callers don't break.
+async function countersignAndSubmitSellTransfer(userSignedTxBase64, blockhash, lastValidBlockHeight) {
+  return countersignAndSubmit(userSignedTxBase64, blockhash, lastValidBlockHeight, 'Sell transfer');
 }
 
 async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
@@ -743,27 +744,52 @@ async function getUserSolUsdcBalance(solAddress) {
   } catch { return 0; }
 }
 
-// Build an unsigned Solana tx to transfer USDC from user's ATA → agent's USDC ATA.
+// Build an unsigned Solana tx to transfer USDC from user's wallet → agent's USDC ATA.
 // Agent is fee payer so the user needs no SOL.
+// Looks up the user's actual on-chain USDC account rather than computing the ATA address,
+// avoiding InvalidAccountData when the account lives at a non-standard address.
 async function buildSolUsdcTransferToAgent(userSolAddress, rawUsdcAmount) {
-  const { createTransferInstruction, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
+  const { createTransferCheckedInstruction, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
+  const USDC_DECIMALS = 6;
 
   return withFallback(async (connection) => {
     const agentKeypair = getAgentKeypair();
     const userPubkey   = new PublicKey(userSolAddress);
-    const userUsdcAta  = getUserUsdcAta(userSolAddress);
     const agentUsdcAta = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+
+    // Look up user's actual USDC token account — avoids InvalidAccountData when
+    // the account was created at a non-ATA address (e.g. by CCTP mint or legacy flow).
+    const userAccounts = await connection.getParsedTokenAccountsByOwner(userPubkey, {
+      mint: new PublicKey(USDC_SOL),
+    });
+    if (!userAccounts.value.length) {
+      throw new Error('No USDC token account found in your Solana wallet');
+    }
+    // Pick the account with the highest balance to avoid rounding issues.
+    const best = userAccounts.value.reduce((a, b) =>
+      BigInt(a.account.data.parsed.info.tokenAmount.amount) >=
+      BigInt(b.account.data.parsed.info.tokenAmount.amount) ? a : b
+    );
+    const userUsdcAccount = new PublicKey(best.pubkey);
+    const userBalance = BigInt(best.account.data.parsed.info.tokenAmount.amount);
+    if (userBalance < BigInt(rawUsdcAmount)) {
+      throw new Error(
+        `Insufficient USDC: wallet has $${Number(userBalance)/1e6} (need $${rawUsdcAmount/1e6})`
+      );
+    }
 
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
 
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
     tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }));
-    tx.add(createTransferInstruction(
-      userUsdcAta,
+    tx.add(createTransferCheckedInstruction(
+      userUsdcAccount,
+      new PublicKey(USDC_SOL),
       agentUsdcAta,
       userPubkey,
-      rawUsdcAmount,
+      BigInt(rawUsdcAmount),
+      USDC_DECIMALS,
       [],
       SPL_TOKEN
     ));
@@ -781,31 +807,7 @@ async function buildSolGasTopupTransaction(userSolAddress) {
 // Receive a user-signed USDC→agent transfer, countersign as fee payer, submit,
 // then swap $0.50 of the received USDC for SOL so the agent can pay tx fees.
 async function submitSolGasTopup(userSignedTxBase64, blockhash, lastValidBlockHeight) {
-  const txBytes = Buffer.from(userSignedTxBase64, 'base64');
-  const tx = Transaction.from(txBytes);
-  const agentKeypair = getAgentKeypair();
-  tx.partialSign(agentKeypair);
-  const serialized = tx.serialize();
-
-  await withFallback(async (connection) => {
-    const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
-    const id = await sendRaw();
-    console.log('Sol gas topup transfer submitted:', id);
-
-    const retryTimer = setInterval(() => sendRaw().catch(() => {}), 3000);
-    let conf;
-    try {
-      conf = await connection.confirmTransaction(
-        { signature: id, blockhash, lastValidBlockHeight },
-        'confirmed'
-      );
-    } finally {
-      clearInterval(retryTimer);
-    }
-    if (conf.value.err) throw new Error(`Gas topup transfer failed: ${JSON.stringify(conf.value.err)}`);
-    console.log('Gas topup transfer confirmed:', id);
-  });
-
+  await countersignAndSubmit(userSignedTxBase64, blockhash, lastValidBlockHeight, 'Gas topup transfer');
   await topUpGasFromUsdc();
 }
 
@@ -830,5 +832,6 @@ module.exports = {
   buildSolUsdcTransferToAgent,
   buildSolGasTopupTransaction,
   submitSolGasTopup,
+  countersignAndSubmit,
   XSTOCK_MINTS,
 };

@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -205,8 +205,7 @@ router.post('/submit-sol-to-sui-bridge', async (req, res) => {
   }
 
   try {
-    const { countersignAndSubmitSellTransfer: submitTx } = require('../lib/solana');
-    await submitTx(signedTx, blockhash, lastValidBlockHeight);
+    await countersignAndSubmit(signedTx, blockhash, lastValidBlockHeight, 'USDC bridge transfer');
     console.log('User USDC arrived in agent wallet — bridging to Sui...');
     const bridge = await bridgeUsdcSolanaToSui(rawAmount, userSuiAddress);
     res.json({ ok: true, suiMintTxHash: bridge.suiMintTxHash, burnTxHash: bridge.burnTxHash });
