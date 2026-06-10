@@ -705,9 +705,8 @@ router.post('/build-burn', async (req, res) => {
   }
 });
 
-// Bridge USDC from Sui → Solana and forward it to the user's own Solana USDC wallet.
-// The frontend has already burned USDC on Sui (to agent ATA); this completes the receive
-// and then transfers the USDC from the agent ATA to the user's personal ATA.
+// Bridge USDC from Sui → Solana. The frontend burned USDC on Sui with the user's own
+// USDC ATA as mintRecipient; this route attests and mints directly into that ATA.
 router.post('/bridge-to-solana', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -722,19 +721,6 @@ router.post('/bridge-to-solana', async (req, res) => {
     const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
     const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
     const { ethers } = require('ethers');
-    const { PublicKey, Keypair, Transaction: SolTx, ComputeBudgetProgram } = require('@solana/web3.js');
-    const {
-      getOrCreateAssociatedTokenAccount,
-      createTransferInstruction,
-      TOKEN_PROGRAM_ID,
-    } = require('@solana/spl-token');
-    const bs58 = require('bs58');
-    const { withFallback } = require('../lib/solana_connection');
-
-    const USDC_MINT   = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
-    const agentKeypair = Keypair.fromSecretKey(bs58.default.decode(process.env.AGENT_SOL_PRIVATE_KEY));
-    const agentUsdcATA = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
-    const userSolPubkey = new PublicKey(user.sol_address);
 
     // Step 1: Extract CCTP message from Sui burn tx
     const suiClient = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
@@ -751,55 +737,16 @@ router.post('/bridge-to-solana', async (req, res) => {
     console.log('bridge-to-solana: polling attestation...');
     const attestation = await pollAttestation(messageHash);
 
-    // Step 3: Mint USDC on Solana (to agent ATA)
-    console.log('bridge-to-solana: minting USDC on Solana...');
-    const mintResult = await receiveMessageOnSolana(messageHex, attestation);
-
-    // Step 4: Transfer USDC from agent ATA to user's Solana USDC ATA
-    console.log('bridge-to-solana: transferring USDC to user', user.sol_address);
-    const transferTxHash = await withFallback(async (connection) => {
-      const userATA = await getOrCreateAssociatedTokenAccount(
-        connection,
-        agentKeypair,
-        USDC_MINT,
-        userSolPubkey,
-        false,
-        'confirmed',
-        undefined,
-        TOKEN_PROGRAM_ID,
-      );
-
-      const ix = createTransferInstruction(
-        agentUsdcATA,
-        userATA.address,
-        agentKeypair.publicKey,
-        BigInt(rawAmount),
-        [],
-        TOKEN_PROGRAM_ID,
-      );
-
-      const { blockhash } = await connection.getLatestBlockhash('confirmed');
-      const tx = new SolTx({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
-      tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
-      tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }));
-      tx.add(ix);
-      tx.sign(agentKeypair);
-
-      const serialized = tx.serialize();
-      const sig = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
-      console.log('bridge-to-solana: transfer submitted:', sig);
-      await pollSignatureStatus(connection, sig, {
-        label: 'Bridge→Solana USDC transfer',
-        resendFn: () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 }),
-      });
-      console.log('bridge-to-solana: transfer complete', sig);
-      return sig;
-    });
+    // Step 3: Ensure user's USDC ATA exists, then mint directly into it.
+    // The Sui burn encoded user's ATA as mintRecipient; we must pass the same address here.
+    const userUsdcAta = getUserUsdcAta(user.sol_address).toBase58();
+    await ensureUserUsdcAta(user.sol_address);
+    console.log('bridge-to-solana: minting USDC on Solana to user ATA', userUsdcAta);
+    const mintResult = await receiveMessageOnSolana(messageHex, attestation, userUsdcAta);
 
     res.json({
       ok: true,
       mintTxHash: mintResult.txHash,
-      transferTxHash,
       amount: rawAmount / 1e6,
       message: `$${(rawAmount / 1e6).toFixed(2)} USDC bridged to your Solana wallet`,
     });
