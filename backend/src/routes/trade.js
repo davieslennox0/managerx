@@ -737,12 +737,15 @@ router.post('/bridge-to-solana', async (req, res) => {
     console.log('bridge-to-solana: polling attestation...');
     const attestation = await pollAttestation(messageHash);
 
-    // Step 3: Ensure user's USDC ATA exists, then mint directly into it.
-    // The Sui burn encoded user's ATA as mintRecipient; we must pass the same address here.
-    const userUsdcAta = getUserUsdcAta(user.sol_address).toBase58();
+    // Step 3: Read mintRecipient directly from the CCTP message (offset 152, 32 bytes).
+    // CCTP BurnMessage layout: 116-byte header + body[version(4), burnToken(32), mintRecipient(32), ...]
+    // This is the exact address the Sui burn encoded — no re-derivation, no DB mismatch.
+    const msgBuf = Buffer.from(messageHex.replace('0x', ''), 'hex');
+    const { PublicKey: SolPubkey } = require('@solana/web3.js');
+    const mintRecipientFromMessage = new SolPubkey(msgBuf.slice(152, 184)).toBase58();
     await ensureUserUsdcAta(user.sol_address);
-    console.log('bridge-to-solana: minting USDC on Solana to user ATA', userUsdcAta);
-    const mintResult = await receiveMessageOnSolana(messageHex, attestation, userUsdcAta);
+    console.log('bridge-to-solana: minting USDC on Solana to', mintRecipientFromMessage);
+    const mintResult = await receiveMessageOnSolana(messageHex, attestation, mintRecipientFromMessage);
 
     res.json({
       ok: true,
