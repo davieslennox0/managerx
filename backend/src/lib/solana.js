@@ -713,16 +713,93 @@ async function buildJupiterBuyTransaction(userSolAddress, symbol, grossUsdcRaw, 
   });
 }
 
+// How much SOL a user needs to pay their own tx fees (~3 typical txs worth).
+const USER_GAS_THRESHOLD_LAMPORTS = 30_000;
+// How much USDC to convert when user has no SOL ($0.50).
+const USER_GAS_BOOTSTRAP_USDC = 500_000;
+
+// Returns the user's SOL balance in lamports.
+async function getUserSolBalance(userSolAddress) {
+  return withFallback(async (connection) =>
+    connection.getBalance(new PublicKey(userSolAddress))
+  );
+}
+
+// Build a USDC→SOL Jupiter swap from the USER's own wallet.
+// Agent is fee payer for this ONE bootstrap tx (unavoidable: user has zero SOL).
+// After this tx confirms, the user has SOL and pays all future fees themselves.
+// Returns { txBase64, blockhash, lastValidBlockHeight, solOut }.
+async function buildUserGasBootstrapSwap(userSolAddress) {
+  const agentKeypair = getAgentKeypair();
+  const userPubkey   = new PublicKey(userSolAddress);
+
+  // Quote: $0.50 USDC → SOL
+  const quoteRes = await axios.get('https://quote-api.jup.ag/v6/quote', {
+    params: { inputMint: USDC_SOL, outputMint: WSOL_MINT, amount: USER_GAS_BOOTSTRAP_USDC, slippageBps: 100, wrapAndUnwrapSol: true },
+  });
+
+  const instrRes = await axios.post('https://quote-api.jup.ag/v6/swap-instructions', {
+    quoteResponse: quoteRes.data,
+    userPublicKey: userSolAddress,
+    wrapAndUnwrapSol: true,
+    prioritizationFeeLamports: 'auto',
+    dynamicComputeUnitLimit: true,
+  });
+
+  const { computeBudgetInstructions = [], setupInstructions = [], swapInstruction, cleanupInstruction, addressLookupTableAddresses = [] } = instrRes.data;
+
+  function deserializeIx(ix) {
+    return {
+      programId: new PublicKey(ix.programId),
+      keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+      data: Buffer.from(ix.data, 'base64'),
+    };
+  }
+
+  const allIxs = [
+    ...computeBudgetInstructions.map(deserializeIx),
+    ...setupInstructions.map(deserializeIx),
+    deserializeIx(swapInstruction),
+    ...(cleanupInstruction ? [deserializeIx(cleanupInstruction)] : []),
+  ];
+
+  return withFallback(async (connection) => {
+    const altAccounts = (await Promise.all(
+      addressLookupTableAddresses.map(addr =>
+        connection.getAddressLookupTable(new PublicKey(addr)).then(r => r.value)
+      )
+    )).filter(Boolean);
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+    // Agent pays fee for this bootstrap only — user has no SOL yet
+    const message = new TransactionMessage({
+      payerKey: agentKeypair.publicKey,
+      recentBlockhash: blockhash,
+      instructions: allIxs,
+    }).compileToV0Message(altAccounts);
+
+    const tx = new VersionedTransaction(message);
+    tx.sign([agentKeypair]);
+
+    return {
+      txBase64: Buffer.from(tx.serialize()).toString('base64'),
+      blockhash,
+      lastValidBlockHeight,
+      solOut: Number(quoteRes.data.outAmount),
+    };
+  });
+}
+
 // Build a Jupiter sell transaction where:
 //  - User's xStock ATA is the input (user is authority — xStock NEVER enters agent wallet)
 //  - USDC output goes directly to agent's USDC ATA via destinationTokenAccount
-//  - Agent is fee payer only (pre-signed); user adds their authority signature
+//  - USER is fee payer — gas comes from user's own SOL wallet
 //
 // Returns { txBase64, blockhash, lastValidBlockHeight, rawUsdcOutput, shares }
 async function buildJupiterSellTransaction(userSolAddress, mintAddress, shares) {
   const { getMint, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
 
-  const agentKeypair = getAgentKeypair();
   const userPubkey   = new PublicKey(userSolAddress);
   const agentUsdcAta = process.env.AGENT_SOL_USDC_ATA;
 
@@ -762,22 +839,12 @@ async function buildJupiterSellTransaction(userSolAddress, mintAddress, shares) 
       dynamicComputeUnitLimit: true,
     });
 
-    const {
-      computeBudgetInstructions = [],
-      setupInstructions = [],
-      swapInstruction,
-      cleanupInstruction,
-      addressLookupTableAddresses = [],
-    } = instrRes.data;
+    const { computeBudgetInstructions = [], setupInstructions = [], swapInstruction, cleanupInstruction, addressLookupTableAddresses = [] } = instrRes.data;
 
     function deserializeIx(ix) {
       return {
         programId: new PublicKey(ix.programId),
-        keys: ix.accounts.map(a => ({
-          pubkey: new PublicKey(a.pubkey),
-          isSigner: a.isSigner,
-          isWritable: a.isWritable,
-        })),
+        keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
         data: Buffer.from(ix.data, 'base64'),
       };
     }
@@ -797,15 +864,15 @@ async function buildJupiterSellTransaction(userSolAddress, mintAddress, shares) 
 
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-    // Agent is fee payer only — does NOT take custody of xStock
+    // User is fee payer — pays gas from their own SOL
     const message = new TransactionMessage({
-      payerKey: agentKeypair.publicKey,
+      payerKey: userPubkey,
       recentBlockhash: blockhash,
       instructions: allIxs,
     }).compileToV0Message(altAccounts);
 
     const tx = new VersionedTransaction(message);
-    tx.sign([agentKeypair]);
+    // No agent pre-sign — user is sole signer
 
     return {
       txBase64: Buffer.from(tx.serialize()).toString('base64'),
@@ -980,5 +1047,8 @@ module.exports = {
   pollSignatureStatus,
   buildJupiterSellTransaction,
   submitJupiterSellTransaction,
+  getUserSolBalance,
+  buildUserGasBootstrapSwap,
+  USER_GAS_THRESHOLD_LAMPORTS,
   XSTOCK_MINTS,
 };

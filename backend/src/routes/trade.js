@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, buildJupiterSellTransaction, submitJupiterSellTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, buildJupiterSellTransaction, submitJupiterSellTransaction, getUserSolBalance, buildUserGasBootstrapSwap, USER_GAS_THRESHOLD_LAMPORTS, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -71,6 +71,37 @@ router.post('/build-sell-transfer', async (req, res) => {
   }
 });
 
+// Build a USDC→SOL bootstrap swap FROM the user's wallet.
+// Agent pays tx fee for this one (user has zero SOL — unavoidable bootstrap).
+// After this confirms, user has SOL and pays all future gas themselves.
+router.post('/build-user-gas', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user.sol_address) return res.status(400).json({ error: 'No Solana address on account' });
+  try {
+    const result = await buildUserGasBootstrapSwap(user.sol_address);
+    res.json(result);
+  } catch (e) {
+    console.error('build-user-gas error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Submit the user-signed gas bootstrap tx and confirm.
+router.post('/submit-user-gas', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const { signedTx, blockhash, lastValidBlockHeight } = req.body;
+  if (!signedTx || !blockhash || !lastValidBlockHeight) return res.status(400).json({ error: 'Missing fields' });
+  try {
+    const txHash = await submitJupiterBuyTransaction(signedTx, blockhash, lastValidBlockHeight);
+    res.json({ ok: true, txHash });
+  } catch (e) {
+    console.error('submit-user-gas error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Build a Jupiter sell tx (xStock→USDC) for the user to sign.
 // xStock goes directly from user wallet → Jupiter pool.
 // USDC output lands in agent ATA for bridging to Sui.
@@ -94,8 +125,17 @@ router.post('/build-sell-swap', async (req, res) => {
     const mintAddress = XSTOCK_MINTS[canonical];
     if (!mintAddress) return res.status(400).json({ error: `Unknown xStock: ${symbol}` });
 
-    const result = await buildJupiterSellTransaction(user.sol_address, mintAddress, shares);
-    res.json({ ...result, price, symbol: canonical });
+    const [result, userSolLamports] = await Promise.all([
+      buildJupiterSellTransaction(user.sol_address, mintAddress, shares),
+      getUserSolBalance(user.sol_address),
+    ]);
+    res.json({
+      ...result,
+      price,
+      symbol: canonical,
+      userSolLamports,
+      needsGas: userSolLamports < USER_GAS_THRESHOLD_LAMPORTS,
+    });
   } catch (e) {
     console.error('build-sell-swap error:', e);
     res.status(500).json({ error: e.message });

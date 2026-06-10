@@ -167,31 +167,48 @@ export default function Chat({ user, chain }) {
           const suiAddress = user.suiAddress;
           if (!suiAddress) throw new Error('Sui address not found on your account.');
 
-          // Step 1: Backend builds Jupiter sell tx (agent pre-signed as fee payer)
+          // Step 1: Build sell tx. Response also tells us if user needs gas.
           const { data: buildData } = await axios.post('/api/trade/build-sell-swap', {
             symbol: action.symbol,
             amount: action.amount,
             currency: action.currency || 'usd',
           }, { headers: { Authorization: `Bearer ${token}` } });
 
+          const { VersionedTransaction: VT } = await import('@solana/web3.js');
+
+          const signVT = async (base64) => {
+            const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+            const vtx = VT.deserialize(bytes);
+            try {
+              const signer = await solWallet.getSigner();
+              const signed = await signer.signTransaction(vtx);
+              return btoa(String.fromCharCode(...signed.serialize()));
+            } catch {
+              const c = solWallet._connector;
+              if (c?.setActiveAccountAddress) c.setActiveAccountAddress(solWallet.address);
+              const signed = await c.internalSignTransaction(vtx);
+              return btoa(String.fromCharCode(...signed.serialize()));
+            }
+          };
+
+          // Step 2: If user has no SOL, convert $0.50 of their USDC → SOL first.
+          // Agent pays fee for this one bootstrap (user has zero SOL — unavoidable).
+          // After this, user pays all future gas from their own SOL.
+          if (buildData.needsGas) {
+            setMessages(prev => [...prev, { role: 'assistant', content: `⛽ No SOL for gas. Sign to convert $0.50 of your USDC → SOL (one-time setup)...` }]);
+            const { data: gasData } = await axios.post('/api/trade/build-user-gas', {}, { headers: { Authorization: `Bearer ${token}` } });
+            const signedGasTx = await signVT(gasData.txBase64);
+            await axios.post('/api/trade/submit-user-gas', {
+              signedTx: signedGasTx,
+              blockhash: gasData.blockhash,
+              lastValidBlockHeight: gasData.lastValidBlockHeight,
+            }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
+          }
+
           setMessages(prev => [...prev, { role: 'assistant', content: `🔄 Sign to swap ${action.symbol} → USDC and bridge to Sui...` }]);
 
-          // Step 2: User signs the VersionedTransaction (authority on their xStock ATA)
-          const txBytes = Uint8Array.from(atob(buildData.txBase64), c => c.charCodeAt(0));
-          const { VersionedTransaction: VT } = await import('@solana/web3.js');
-          const vtx = VT.deserialize(txBytes);
-
-          let signedTxBase64;
-          try {
-            const signer = await solWallet.getSigner();
-            const signed = await signer.signTransaction(vtx);
-            signedTxBase64 = btoa(String.fromCharCode(...signed.serialize()));
-          } catch {
-            const solConnector = solWallet._connector;
-            if (solConnector?.setActiveAccountAddress) solConnector.setActiveAccountAddress(solWallet.address);
-            const signed = await solConnector.internalSignTransaction(vtx);
-            signedTxBase64 = btoa(String.fromCharCode(...signed.serialize()));
-          }
+          // Step 3: User signs the sell tx — user is fee payer (uses their own SOL)
+          const signedTxBase64 = await signVT(buildData.txBase64);
 
           // Step 3: Backend confirms swap + bridges USDC to Sui (one call, ~60s)
           const { data: sellResult } = await axios.post('/api/trade/submit-sell-swap', {
