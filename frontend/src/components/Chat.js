@@ -5,7 +5,7 @@ import { useUserWallets, useDynamicContext } from '@dynamic-labs/sdk-react-core'
 import { isSuiWallet } from '@dynamic-labs/sui';
 import { isSolanaWallet } from '@dynamic-labs/solana';
 import { Transaction } from '@mysten/sui/transactions';
-import { Transaction as SolTransaction } from '@solana/web3.js';
+import { Transaction as SolTransaction, PublicKey as SolPublicKey, VersionedTransaction } from '@solana/web3.js';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 
 const CCTP = {
@@ -26,6 +26,19 @@ function base58ToHex(str) {
   let hex = result.toString(16);
   while (hex.length < 64) hex = '0' + hex;
   return '0x' + hex;
+}
+
+// Returns the deterministic SPL Token USDC ATA for a Solana address.
+// USDC uses the legacy SPL Token program, not Token-2022.
+function getUserUsdcAta(userSolAddress) {
+  const ASSOC_PROG = new SolPublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bM3');
+  const TOKEN_PROG = new SolPublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+  const USDC_MINT  = new SolPublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+  const [ata] = SolPublicKey.findProgramAddressSync(
+    [new SolPublicKey(userSolAddress).toBytes(), TOKEN_PROG.toBytes(), USDC_MINT.toBytes()],
+    ASSOC_PROG
+  );
+  return ata.toBase58();
 }
 
 function ConfirmModal({ action, onConfirm, onCancel }) {
@@ -146,16 +159,22 @@ export default function Chat({ user, chain }) {
           execUserSuiAddress = suiAddress;
 
         } else {
-          // ── BUY: user burns USDC on Sui, agent sponsors gas ──────────────────
+          // ── BUY: user burns USDC on Sui → USDC minted to user's Solana ATA ──
           let suiWallet = userWallets?.find(w => isSuiWallet(w));
           if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) suiWallet = primaryWallet;
           if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');
 
-          const suiAddress = suiWallet.address || user.suiAddress;
-          console.log('Using Sui wallet:', suiWallet, 'address:', suiAddress);
+          // Solana wallet needed for the Jupiter swap signature
+          const solWallet = userWallets?.find(w => isSolanaWallet(w));
+          if (!solWallet) throw new Error('Solana wallet not connected. Please connect your Solana wallet.');
 
+          const suiAddress = suiWallet.address || user.suiAddress;
+          const userSolAddress = solWallet.address;
+          console.log('Using Sui wallet:', suiAddress, '| Solana wallet:', userSolAddress);
+
+          // CCTP mint recipient = user's own USDC ATA (agent only collects fee)
           const amountMist = BigInt(Math.round(action.amount * 1e6));
-          const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
+          const mintRecipientHex = base58ToHex(getUserUsdcAta(userSolAddress));
 
           const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
           const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
@@ -246,6 +265,51 @@ export default function Chat({ user, chain }) {
           currency: action.currency || 'usd',
         },
       }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
+
+      // Buy flow: backend minted USDC to user's Solana ATA and built the Jupiter
+      // swap tx. User must sign it with their Solana wallet to complete the trade.
+      if (data.needsSwapSignature) {
+        const { swapTx, blockhash, lastValidBlockHeight, tradeInfo } = data;
+        const solWalletForSwap = userWallets?.find(w => isSolanaWallet(w));
+        if (!solWalletForSwap) throw new Error('Solana wallet not available for swap signing');
+
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `🔄 USDC bridged. Sign the Solana swap to receive your ${action.symbol}...`,
+        }]);
+
+        // Deserialize the VersionedTransaction (agent already pre-signed as fee payer)
+        const txBytes = Uint8Array.from(atob(swapTx), c => c.charCodeAt(0));
+        const vtx = VersionedTransaction.deserialize(txBytes);
+
+        // Sign with user's Solana wallet
+        let signedVtx;
+        const solConnector = solWalletForSwap._connector;
+        if (solConnector && typeof solConnector.internalSignTransaction === 'function') {
+          if (typeof solConnector.setActiveAccountAddress === 'function') {
+            solConnector.setActiveAccountAddress(solWalletForSwap.address);
+          }
+          signedVtx = await solConnector.internalSignTransaction(vtx);
+        } else {
+          const signer = await solWalletForSwap.getSigner();
+          signedVtx = await signer.signTransaction(vtx);
+        }
+        const signedTxBase64 = btoa(String.fromCharCode(...signedVtx.serialize()));
+
+        // Submit — backend just confirms on-chain and records the position
+        const { data: submitData } = await axios.post('/api/trade/submit-buy-swap', {
+          signedTx: signedTxBase64,
+          blockhash,
+          lastValidBlockHeight,
+          tradeInfo,
+        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
+
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `✅ Trade executed!\n\n**BUY** ${action.symbol}\n**Amount:** $${action.amount}\n**Tx:** ${submitData.txHash.slice(0, 10)}...${submitData.txHash.slice(-6)}`,
+        }]);
+        return;
+      }
 
       const successMsg = {
         role: 'assistant',

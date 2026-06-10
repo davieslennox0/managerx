@@ -24,6 +24,7 @@ Claude calls execute_action tool (structured, no text parsing)
 Frontend shows confirmation modal
          ↓
 User approves → Frontend builds CCTP burn tx on Sui
+         (mint recipient = user's own Solana USDC ATA)
          ↓
 Agent sponsors gas (user pays zero SUI)
          ↓
@@ -31,14 +32,21 @@ User signs → USDC burned on Sui
          ↓
 Backend polls Circle attestation (~10–30s)
          ↓
-USDC minted on Solana (agent ATA)
+USDC minted directly to user's Solana USDC wallet
          ↓
-Jupiter swap: USDC → TSLAx
+Backend builds Jupiter swap tx:
+  • 0.75% fee transfer → agent fee wallet
+  • remainder USDC → TSLAx swap
+  (agent is fee payer, pre-signs; user signs as USDC authority)
          ↓
-xStock transferred to user's Solana wallet
+User signs Solana swap tx
+         ↓
+TSLAx lands in user's Solana wallet
 ```
 
 Selling reverses the flow: xStock → agent → Jupiter swap → CCTP → USDC on Sui.
+
+**Fee architecture:** The agent wallet only ever collects the 0.75% platform fee. User USDC is never held by the agent — it flows directly from Sui → user's Solana wallet → xStock.
 
 ---
 
@@ -183,6 +191,7 @@ Claude uses a structured `execute_action` tool instead of generating JSON-in-mar
 | POST | `/api/trade/execute` | Execute buy/sell after user signature |
 | POST | `/api/trade/build-sell-transfer` | Build Solana xStock transfer tx for sell |
 | POST | `/api/trade/submit-sell-transfer` | Countersign + submit sell transfer |
+| POST | `/api/trade/submit-buy-swap` | Submit user-signed Jupiter buy swap + record position |
 | POST | `/api/trade/bridge-to-solana` | Bridge USDC Sui→Solana (no trade) |
 | POST | `/api/trade/recover-solana-usdc` | Recover stuck USDC from agent wallet |
 | GET  | `/api/trade/agent-usdc-balance` | Check agent's pending USDC balance |

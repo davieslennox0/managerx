@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwap, jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, transferXStockToUser, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -86,6 +86,57 @@ router.post('/submit-sell-transfer', async (req, res) => {
     res.json({ txHash });
   } catch (e) {
     console.error('Submit sell transfer error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Submit a Jupiter buy tx that the user has signed with their Solana wallet.
+// Records the trade position after on-chain confirmation.
+router.post('/submit-buy-swap', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { signedTx, blockhash, lastValidBlockHeight, tradeInfo } = req.body;
+  if (!signedTx || !tradeInfo) return res.status(400).json({ error: 'Missing signedTx or tradeInfo' });
+
+  const { symbol, shares, price, total, chain } = tradeInfo;
+  if (!symbol || !shares || !price || !chain) return res.status(400).json({ error: 'Incomplete tradeInfo' });
+
+  try {
+    const txHash = await submitJupiterBuyTransaction(signedTx, blockhash, lastValidBlockHeight);
+    console.log('Buy swap confirmed:', txHash);
+
+    // Record position
+    const holding = db.prepare('SELECT * FROM positions WHERE user_id = ? AND chain = ? AND symbol = ?')
+      .get(user.id, chain, symbol);
+
+    if (holding) {
+      const newShares = holding.shares + shares;
+      const newAvg = ((holding.avg_price * holding.shares) + (price * shares)) / newShares;
+      db.prepare('UPDATE positions SET shares = ?, avg_price = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND chain = ? AND symbol = ?')
+        .run(newShares, newAvg, user.id, chain, symbol);
+    } else {
+      db.prepare('INSERT INTO positions (id, user_id, chain, symbol, shares, avg_price) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(uuid(), user.id, chain, symbol, shares, price);
+    }
+
+    db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), user.id, chain, 'buy', symbol, shares, price, total, txHash, 'success');
+
+    storeTradeReceipt({ userId: user.id, chain, type: 'buy', symbol, shares, price, total, txHash, timestamp: new Date().toISOString() }).catch(() => {});
+
+    res.json({
+      success: true,
+      message: `Bought ${shares.toFixed(6)} ${symbol} @ $${price.toFixed(2)}`,
+      txHash,
+      total: total.toFixed(2),
+    });
+  } catch (e) {
+    console.error('Submit buy swap error:', e);
+    try {
+      db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(uuid(), user.id, chain, 'buy', symbol, shares, price, total, null, 'failed', e.message?.slice(0, 200));
+    } catch (_) {}
     res.status(500).json({ error: e.message });
   }
 });
@@ -203,13 +254,16 @@ router.post('/execute', async (req, res) => {
 
         } else {
           // ── Buy: USDC (Sui) → xStock (Solana) ────────────────────────────────
+          // USDC is minted directly to the user's own Solana USDC ATA.
+          // The agent only collects the fee; the swap happens from the user's wallet.
           const usdcAmountGross = currency === 'usd' ? amount : shares * price;
           const feeBps = parseInt(process.env.PLATFORM_FEE_BPS || '0');
-          const buyFeeUsdc = usdcAmountGross * feeBps / 10000;
-          const usdcAmount = usdcAmountGross - buyFeeUsdc;
-          console.log(`Buy fee: $${buyFeeUsdc.toFixed(4)} (${feeBps} bps) → swapping $${usdcAmount.toFixed(4)} USDC`);
+          const grossUsdcRaw = Math.round(usdcAmountGross * 1e6);
 
           if (!suiTxHash) return res.status(400).json({ error: 'Missing Sui burn transaction' });
+
+          const userSolAddress = db.prepare('SELECT sol_address FROM users WHERE id = ?').get(user.id)?.sol_address;
+          if (!userSolAddress) return res.status(400).json({ error: 'No Solana address on account' });
 
           // Step 1: Get attestation for the user-signed burn tx
           console.log('Step 1: Getting attestation for burn tx:', suiTxHash);
@@ -217,8 +271,8 @@ router.post('/execute', async (req, res) => {
           const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
 
           const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
-          const client = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
-          const txData = await client.getTransactionBlock({
+          const suiClient = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
+          const txData = await suiClient.getTransactionBlock({
             digest: suiTxHash,
             options: { showEvents: true },
           });
@@ -239,8 +293,7 @@ router.post('/execute', async (req, res) => {
           console.log('Step 2: Polling attestation...');
           const attestation = await pollAttestation(messageHash);
 
-          // Step 3: Gas check BEFORE minting — if this fails, burn tx is still redeemable
-          // by retrying /execute with the same suiTxHash once gas is resolved.
+          // Step 3: Gas check BEFORE minting — burn tx stays redeemable if this fails
           console.log('Step 3: Checking gas...');
           const gasStatus = await ensureGas();
           if (!gasStatus.ok) {
@@ -253,25 +306,31 @@ router.post('/execute', async (req, res) => {
             });
           }
 
-          // Step 4: Mint USDC on Solana (idempotent — already-minted nonce is treated as success)
-          console.log('Step 4: Minting USDC on Solana...');
-          await receiveMessageOnSolana(messageHex, attestation);
+          // Step 4: Ensure user's USDC ATA exists (agent pays rent if first time)
+          console.log('Step 4: Ensuring user USDC ATA exists...');
+          await ensureUserUsdcAta(userSolAddress);
+          const userUsdcAta = getUserUsdcAta(userSolAddress);
 
-          // Step 5: Swap on Jupiter
-          console.log('Step 5: Swapping on Jupiter...');
-          const swap = await jupiterSwap(process.env.AGENT_SOL_ADDRESS, symbol, usdcAmount);
-          txHash = swap.txHash;
-          console.log('Swap complete:', txHash);
+          // Step 5: Mint USDC to user's own USDC ATA (not agent's)
+          console.log('Step 5: Minting USDC to user ATA:', userUsdcAta.toBase58());
+          await receiveMessageOnSolana(messageHex, attestation, userUsdcAta.toBase58());
 
-          // Step 6: Transfer xStock tokens from agent wallet to user's Solana address
-          const userSolAddress = db.prepare('SELECT sol_address FROM users WHERE id = ?').get(user.id)?.sol_address;
-          if (userSolAddress) {
-            console.log('Step 6: Transferring xStock to user:', userSolAddress);
-            const transferTx = await transferXStockToUser(swap.mintAddress, userSolAddress, swap.rawOutputAmount);
-            console.log('Transfer complete:', transferTx);
-          } else {
-            console.warn('Step 6: No sol_address for user', user.id, '— tokens remain in agent wallet');
-          }
+          // Step 6: Build Jupiter buy tx — fee transfer + swap in one tx, agent pre-signs as fee payer
+          console.log('Step 6: Building Jupiter buy tx from user wallet...');
+          const swapTxData = await buildJupiterBuyTransaction(userSolAddress, symbol, grossUsdcRaw, feeBps);
+
+          // Return the unsigned tx to the frontend for user to sign with their Solana wallet.
+          // Position is recorded after the user signs and /submit-buy-swap confirms.
+          return res.json({
+            needsSwapSignature: true,
+            swapTx: swapTxData.txBase64,
+            blockhash: swapTxData.blockhash,
+            lastValidBlockHeight: swapTxData.lastValidBlockHeight,
+            mintAddress: swapTxData.mintAddress,
+            feeRaw: swapTxData.feeRaw,
+            swapRaw: swapTxData.swapRaw,
+            tradeInfo: { symbol, shares, price, total, chain },
+          });
         }
       }
     } else {

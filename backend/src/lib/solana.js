@@ -1,4 +1,4 @@
-const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, ComputeBudgetProgram } = require('@solana/web3.js');
+const { Connection, PublicKey, Keypair, VersionedTransaction, Transaction, ComputeBudgetProgram, TransactionMessage } = require('@solana/web3.js');
 const axios = require('axios');
 const bs58 = require('bs58');
 const { withFallback } = require('./solana_connection');
@@ -509,6 +509,171 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
   });
 }
 
+// Returns the deterministic USDC ATA address for a Solana wallet.
+// USDC uses the legacy SPL Token program, not Token-2022.
+function getUserUsdcAta(userSolAddress) {
+  const { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
+  return getAssociatedTokenAddressSync(
+    new PublicKey(USDC_SOL),
+    new PublicKey(userSolAddress),
+    false,
+    SPL_TOKEN
+  );
+}
+
+// Create user's USDC ATA if it doesn't exist yet. Agent pays rent.
+async function ensureUserUsdcAta(userSolAddress) {
+  const { getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
+  return withFallback(async (connection) => {
+    const agentKeypair = getAgentKeypair();
+    return getOrCreateAssociatedTokenAccount(
+      connection,
+      agentKeypair,
+      new PublicKey(USDC_SOL),
+      new PublicKey(userSolAddress),
+      false,
+      'confirmed',
+      undefined,
+      SPL_TOKEN
+    );
+  });
+}
+
+// Build a Jupiter buy transaction where:
+//  - User's USDC ATA is the input (not the agent's)
+//  - A fee transfer (user → agent) is prepended in the same tx
+//  - Agent is the fee payer (pre-signed), user just adds their signature
+//
+// Returns { txBase64, blockhash, lastValidBlockHeight, mintAddress, feeRaw, swapRaw }
+// The caller returns this to the frontend for user signing.
+async function buildJupiterBuyTransaction(userSolAddress, symbol, grossUsdcRaw, feeBps) {
+  const { createTransferInstruction, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
+
+  const canonical = symbol.replace(/x$/i, '').toUpperCase() + 'x';
+  const mint = XSTOCK_MINTS[canonical];
+  if (!mint) throw new Error(`Unknown xStock: ${symbol}`);
+
+  const agentKeypair = getAgentKeypair();
+  const userPubkey = new PublicKey(userSolAddress);
+  const userUsdcAta = getUserUsdcAta(userSolAddress);
+  const agentUsdcAta = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+
+  const feeRaw = Math.round(grossUsdcRaw * feeBps / 10000);
+  const swapRaw = grossUsdcRaw - feeRaw;
+
+  // Jupiter v6 quote for swapRaw USDC → xStock
+  const quoteRes = await axios.get('https://quote-api.jup.ag/v6/quote', {
+    params: { inputMint: USDC_SOL, outputMint: mint, amount: swapRaw, slippageBps: 50 },
+  });
+
+  // Jupiter v6 swap-instructions (individual instructions, not full tx)
+  const instrRes = await axios.post('https://quote-api.jup.ag/v6/swap-instructions', {
+    quoteResponse: quoteRes.data,
+    userPublicKey: userSolAddress,
+    wrapAndUnwrapSol: false,
+    prioritizationFeeLamports: 'auto',
+    dynamicComputeUnitLimit: true,
+  });
+
+  const {
+    computeBudgetInstructions = [],
+    setupInstructions = [],
+    swapInstruction,
+    cleanupInstruction,
+    addressLookupTableAddresses = [],
+  } = instrRes.data;
+
+  function deserializeIx(ix) {
+    return {
+      programId: new PublicKey(ix.programId),
+      keys: ix.accounts.map(a => ({
+        pubkey: new PublicKey(a.pubkey),
+        isSigner: a.isSigner,
+        isWritable: a.isWritable,
+      })),
+      data: Buffer.from(ix.data, 'base64'),
+    };
+  }
+
+  // Fee transfer: user's USDC ATA → agent's fee ATA
+  const feeIx = feeRaw > 0
+    ? createTransferInstruction(userUsdcAta, agentUsdcAta, userPubkey, feeRaw, [], SPL_TOKEN)
+    : null;
+
+  const allIxs = [
+    ...computeBudgetInstructions.map(deserializeIx),
+    ...(feeIx ? [feeIx] : []),
+    ...setupInstructions.map(deserializeIx),
+    deserializeIx(swapInstruction),
+    ...(cleanupInstruction ? [deserializeIx(cleanupInstruction)] : []),
+  ];
+
+  return withFallback(async (connection) => {
+    // Fetch address lookup tables required by Jupiter
+    const altAccounts = (await Promise.all(
+      addressLookupTableAddresses.map(addr =>
+        connection.getAddressLookupTable(new PublicKey(addr)).then(r => r.value)
+      )
+    )).filter(Boolean);
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+    const message = new TransactionMessage({
+      payerKey: agentKeypair.publicKey,
+      recentBlockhash: blockhash,
+      instructions: allIxs,
+    }).compileToV0Message(altAccounts);
+
+    const tx = new VersionedTransaction(message);
+    tx.sign([agentKeypair]); // agent pre-signs as fee payer
+
+    return {
+      txBase64: Buffer.from(tx.serialize()).toString('base64'),
+      blockhash,
+      lastValidBlockHeight,
+      mintAddress: mint,
+      feeRaw,
+      swapRaw,
+    };
+  });
+}
+
+// Submit a Jupiter buy tx that the user has signed. Agent already signed at build time.
+// Keeps rebroadcasting until confirmed or blockhash expires.
+async function submitJupiterBuyTransaction(userSignedTxBase64, blockhash, lastValidBlockHeight) {
+  const txBytes = Buffer.from(userSignedTxBase64, 'base64');
+  const tx = VersionedTransaction.deserialize(txBytes);
+  const serialized = tx.serialize();
+
+  return withFallback(async (connection) => {
+    const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+
+    const id = await sendRaw();
+    console.log('Jupiter buy submitted:', id, '— confirming (up to 120s)...');
+
+    const retryTimer = setInterval(() => { sendRaw().catch(() => {}); }, 3000);
+    let conf;
+    try {
+      conf = await connection.confirmTransaction(
+        { signature: id, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+    } finally {
+      clearInterval(retryTimer);
+    }
+
+    if (conf.value.err) {
+      const txData = await connection.getTransaction(id, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      }).catch(() => null);
+      const logs = txData?.meta?.logMessages?.join('\n') || '';
+      throw new Error(`Jupiter buy failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
+    }
+    return id;
+  });
+}
+
 module.exports = {
   getSolPortfolio,
   jupiterSwap,
@@ -521,5 +686,9 @@ module.exports = {
   ensureGas,
   topUpGasFromUsdc,
   getAgentGasStatus,
+  buildJupiterBuyTransaction,
+  submitJupiterBuyTransaction,
+  ensureUserUsdcAta,
+  getUserUsdcAta,
   XSTOCK_MINTS,
 };

@@ -96,7 +96,7 @@ function findAuthorityPda() {
 }
 
 // Receive USDC on Solana (mint side of bridge)
-async function receiveMessageOnSolana(messageHex, attestationHex) {
+async function receiveMessageOnSolana(messageHex, attestationHex, recipientAddress) {
   const { withFallback } = require('./solana_connection');
   const agentKeypair = getAgentKeypair();
 
@@ -121,7 +121,7 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
   const usedNoncePDA = findUsedNoncePDA(nonce, sourceDomain);
   const burnToken = messageBytes.slice(120, 152).toString('hex');
   const tokenPairPDA = findTokenPairPDA(sourceDomain, burnToken);
-  const recipientTokenAccount = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+  const recipientTokenAccount = new PublicKey(recipientAddress || process.env.AGENT_SOL_USDC_ATA);
 
   return withFallback(async (connection) => {
     const provider = new anchor.AnchorProvider(
