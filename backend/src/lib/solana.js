@@ -763,7 +763,11 @@ async function buildSolUsdcTransferToAgent(userSolAddress, rawUsdcAmount) {
       mint: new PublicKey(USDC_SOL),
     });
     if (!userAccounts.value.length) {
-      throw new Error('No USDC token account found in your Solana wallet');
+      throw new Error(
+        `Your Solana wallet (${userSolAddress.slice(0, 8)}…) has no USDC. ` +
+        `To bridge Solana→Sui you need USDC in your own Solana wallet. ` +
+        `You can get USDC on Solana by bridging from Sui, or selling an xStock position.`
+      );
     }
     // Pick the account with the highest balance to avoid rounding issues.
     const best = userAccounts.value.reduce((a, b) =>

@@ -80,10 +80,11 @@ async function chat({ messages, chain, portfolio }) {
 
   const crossChain = portfolio.crossChain;
   const crossChainSummary = crossChain ? `
-Wallet addresses:
-- Sui address: ${crossChain.sui.address || 'not connected'} — $${crossChain.sui.usdcBalance.toFixed(2)} USDC
-- Solana address: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}
-- USDC ready to trade (agent wallet): $${(crossChain.agentUsdcBalance || 0).toFixed(2)}` : '';
+Wallet addresses (user's own wallets — only these can be bridged by the user):
+- Sui wallet: ${crossChain.sui.address || 'not connected'} — $${crossChain.sui.usdcBalance.toFixed(2)} USDC
+- Solana wallet: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}
+Platform agent wallet (NOT the user's money — used only for trade execution fees):
+- Agent USDC (operational reserve): $${(crossChain.agentUsdcBalance || 0).toFixed(2)}` : '';
 
   const activePortfolio = { ...portfolio };
   delete activePortfolio.crossChain;
@@ -101,7 +102,9 @@ ${JSON.stringify(activePortfolio, null, 2)}
 INSTRUCTIONS:
 - You have real-time price data via the portfolio context above
 - When the user wants to buy, sell, or bridge — call the execute_action tool immediately. Do NOT refuse based on your own balance calculations. The backend validates all balances and will return an error if something is wrong.
-- "USDC ready to trade (agent wallet)" is USDC the user has already deposited and is available for buys, in addition to their Sui wallet balance.
+- The "Agent USDC (operational reserve)" shown above is the PLATFORM's own wallet for paying gas fees — it is NOT the user's money. NEVER count it as part of the user's available balance or use it in any balance calculation shown to the user.
+- The user's bridgeable USDC is ONLY what is shown under "Sui wallet" and "Solana wallet" — these are their own personal wallets.
+- If the user wants to bridge Solana→Sui and their Solana wallet shows $0.00 USDC, tell them they have no Solana USDC to bridge. Do not add the agent reserve to this calculation.
 - Never say you can't execute trades or don't have prices
 - Always confirm before executing trades over $100
 - Under $100 execute immediately via the tool
