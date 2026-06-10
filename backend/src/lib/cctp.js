@@ -193,7 +193,6 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
     // requires ~0.003 SOL in rent. Auto-topup from USDC via Jupiter if underfunded.
     const agentSolBalance = await connection.getBalance(agentKeypair.publicKey);
     const MIN_SOL_FOR_CCTP = 4_000_000;
-    const effectiveUsdcAmount = rawUsdcAmount;
     if (agentSolBalance < MIN_SOL_FOR_CCTP) {
       console.log(`Agent SOL low (${(agentSolBalance/1e9).toFixed(6)}), swapping USDC → SOL for gas...`);
       try {
@@ -235,6 +234,10 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
         );
       }
     }
+
+    // Re-read USDC balance after potential topup swap — topup may have consumed some USDC.
+    const usdcAfterTopup = parseInt((await connection.getTokenAccountBalance(burnTokenAccount)).value.amount, 10);
+    const effectiveUsdcAmount = Math.min(rawUsdcAmount, usdcAfterTopup);
 
     const provider = new anchor.AnchorProvider(
       connection,
