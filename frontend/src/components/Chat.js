@@ -6,6 +6,7 @@ import { isSuiWallet } from '@dynamic-labs/sui';
 import { isSolanaWallet } from '@dynamic-labs/solana';
 import { Transaction } from '@mysten/sui/transactions';
 import { Transaction as SolTransaction, PublicKey as SolPublicKey, VersionedTransaction } from '@solana/web3.js';
+import { getAssociatedTokenAddressSync } from '@solana/spl-token';
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 
 const CCTP = {
@@ -16,7 +17,6 @@ const CCTP = {
   DENY_LIST: '0x0000000000000000000000000000000000000000000000000000000000000403',
   USDC_TYPE: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
   SOLANA_DOMAIN: 5,
-  AGENT_ATA: '6fnbQ8eaU5WhJEqD9LgzWigZ7nLcJdVMmAvvLSL3FvgP',
 };
 
 function base58ToHex(str) {
@@ -244,7 +244,10 @@ export default function Chat({ user, chain }) {
 
           // CCTP mint recipient = user's own USDC ATA (agent only collects fee)
           const amountMist = BigInt(Math.round(action.amount * 1e6));
-          const mintRecipientHex = base58ToHex(getUserUsdcAta(userSolAddress));
+          const userSolPubkey = new SolPublicKey(user.solAddress);
+          const USDC_MINT = new SolPublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+          const userUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, userSolPubkey);
+          const mintRecipientHex = '0x' + Buffer.from(userUsdcAta.toBytes()).toString('hex');
 
           const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
           const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
@@ -313,6 +316,7 @@ export default function Chat({ user, chain }) {
             const { data: bridgeData } = await axios.post('/api/trade/bridge-to-solana', {
               suiTxHash,
               rawAmount: Math.round(action.amount * 1e6),
+              userSolUsdcAta: userUsdcAta.toBase58(),
             }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
             setMessages(prev => [...prev, {
               role: 'assistant',
@@ -328,6 +332,7 @@ export default function Chat({ user, chain }) {
         suiTxHash,
         solTxHash,
         userSuiAddress: execUserSuiAddress,
+        userSolUsdcAta: userUsdcAta?.toBase58(),
         action: {
           type: action.action,
           symbol: action.symbol,
@@ -463,7 +468,8 @@ export default function Chat({ user, chain }) {
 
       const suiAddress = suiWallet.address || user.suiAddress;
       const amountMist = BigInt(1_000_000); // $1 USDC
-      const mintRecipientHex = base58ToHex(CCTP.AGENT_ATA);
+      const AGENT_USDC_ATA = '6fnbQ8eaU5WhJEqD9LgzWigZ7nLcJdVMmAvvLSL3FvgP';
+      const mintRecipientHex = base58ToHex(AGENT_USDC_ATA);
 
       const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
       const coins = await suiClient.getCoins({ owner: suiAddress, coinType: CCTP.USDC_TYPE });
