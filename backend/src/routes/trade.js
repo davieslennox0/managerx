@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -61,9 +61,8 @@ router.post('/build-sell-transfer', async (req, res) => {
     const mintAddress = XSTOCK_MINTS[canonical];
     if (!mintAddress) return res.status(400).json({ error: `Unknown xStock: ${symbol}` });
 
-    // xStock tokens use 6 decimals (consistent with Jupiter's outAmount / 1e6 convention)
-    const rawAmount = Math.round(shares * 1e6);
-    const { txBase64, blockhash, lastValidBlockHeight } = await buildSellTransferTransaction(mintAddress, user.sol_address, rawAmount);
+    // Pass shares; buildSellTransferTransaction fetches actual decimals on-chain
+    const { txBase64, blockhash, lastValidBlockHeight, rawAmount } = await buildSellTransferTransaction(mintAddress, user.sol_address, shares);
 
     res.json({ transaction: txBase64, blockhash, lastValidBlockHeight, mintAddress, rawAmount, shares });
   } catch (e) {
@@ -298,7 +297,8 @@ router.post('/execute', async (req, res) => {
           const mintAddress = XSTOCK_MINTS[canonical];
           if (!mintAddress) throw new Error(`Unknown xStock: ${symbol}`);
 
-          const rawAmount = Math.round(shares * 1e6);
+          const decimals = await getMintDecimals(mintAddress);
+          const rawAmount = Math.round(shares * 10 ** decimals);
 
           // Gas check: ensure agent has SOL before swap. Auto-tops up from USDC if possible.
           const gasStatus = await ensureGas();

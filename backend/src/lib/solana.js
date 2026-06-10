@@ -334,13 +334,17 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
 // (xStock from user's ATA → agent's ATA).
 // Agent is fee payer and pre-signs so the user's embedded wallet needs no SOL.
 // Returns base64 partially-signed tx bytes; user must add their signature.
-async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmount) {
+// Takes `shares` (float) and computes rawAmount using the mint's actual on-chain decimals.
+// Also looks up the user's real token account address rather than deriving the ATA,
+// which handles tokens with non-standard accounts and all Token-2022 extensions.
+async function buildSellTransferTransaction(mintAddress, userSolAddress, shares) {
   const {
     getOrCreateAssociatedTokenAccount,
-    getAssociatedTokenAddressSync,
+    createTransferCheckedWithFeeInstruction,
     createTransferCheckedInstruction,
     getMint,
     TOKEN_2022_PROGRAM_ID,
+    getTransferFeeConfig,
   } = require('@solana/spl-token');
 
   return withFallback(async (connection) => {
@@ -350,8 +354,24 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
 
     const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
     const decimals = mintInfo.decimals;
+    const rawAmount = BigInt(Math.round(shares * 10 ** decimals));
 
-    const userATA = getAssociatedTokenAddressSync(mint, userPubkey, false, TOKEN_2022_PROGRAM_ID);
+    // Look up user's actual on-chain token account for this mint.
+    // Avoids InvalidAccountData that occurs when getAssociatedTokenAddressSync
+    // returns an uninitialized address (e.g. if Jupiter created a non-ATA account).
+    const userAccounts = await connection.getParsedTokenAccountsByOwner(userPubkey, { mint });
+    if (!userAccounts.value.length) {
+      throw new Error(`No ${mintAddress.slice(0, 8)}… token account found in your Solana wallet`);
+    }
+    const userTokenAccount = userAccounts.value[0];
+    const userATA = new PublicKey(userTokenAccount.pubkey);
+    const userBalance = BigInt(userTokenAccount.account.data.parsed.info.tokenAmount.amount);
+    if (userBalance < rawAmount) {
+      throw new Error(
+        `Insufficient holdings: wallet has ${userBalance} raw, need ${rawAmount} ` +
+        `(${shares} shares × 10^${decimals})`
+      );
+    }
 
     // Ensure agent's ATA exists for this token (creates + funds it if first-time sell)
     const agentATAAccount = await getOrCreateAssociatedTokenAccount(
@@ -365,30 +385,51 @@ async function buildSellTransferTransaction(mintAddress, userSolAddress, rawAmou
       TOKEN_2022_PROGRAM_ID
     );
 
-    const transferIx = createTransferCheckedInstruction(
-      userATA,
-      mint,
-      agentATAAccount.address,
-      userPubkey,
-      BigInt(rawAmount),
-      decimals,
-      [],
-      TOKEN_2022_PROGRAM_ID
-    );
+    // Use WithFee variant if mint has TransferFeeConfig extension, so the
+    // Token-2022 program receives the correct instruction type.
+    const transferFeeConfig = getTransferFeeConfig(mintInfo);
+    let transferIx;
+    if (transferFeeConfig) {
+      const epoch = BigInt((await connection.getEpochInfo()).epoch);
+      const feeConfig = transferFeeConfig.newerTransferFee.epoch <= epoch
+        ? transferFeeConfig.newerTransferFee
+        : transferFeeConfig.olderTransferFee;
+      const feeBps = Number(feeConfig.transferFeeBasisPoints);
+      const maxFee  = feeConfig.maximumFee;
+      const rawFee  = rawAmount * BigInt(feeBps) / 10000n;
+      const fee     = rawFee > maxFee ? maxFee : rawFee;
+      transferIx = createTransferCheckedWithFeeInstruction(
+        userATA,
+        mint,
+        agentATAAccount.address,
+        userPubkey,
+        rawAmount,
+        decimals,
+        fee,
+        [],
+        TOKEN_2022_PROGRAM_ID
+      );
+    } else {
+      transferIx = createTransferCheckedInstruction(
+        userATA,
+        mint,
+        agentATAAccount.address,
+        userPubkey,
+        rawAmount,
+        decimals,
+        [],
+        TOKEN_2022_PROGRAM_ID
+      );
+    }
 
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-    // Agent is fee payer — user's embedded wallet needs no SOL.
-    // Agent does NOT pre-sign here; user signs first, then POSTs to
-    // /submit-sell-transfer where the backend countersigns + submits.
-    // Pre-signing here would be invalidated if the wallet refreshes the blockhash.
     const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
-    // Priority fee: 200k micro-lamports/CU — competitive enough for mainnet congestion
     tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
     tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }));
     tx.add(transferIx);
 
     const txBase64 = tx.serialize({ requireAllSignatures: false }).toString('base64');
-    return { txBase64, blockhash, lastValidBlockHeight };
+    return { txBase64, blockhash, lastValidBlockHeight, rawAmount: rawAmount.toString() };
   });
 }
 
@@ -674,6 +715,18 @@ async function submitJupiterBuyTransaction(userSignedTxBase64, blockhash, lastVa
   });
 }
 
+// Cache mint decimals to avoid repeated RPC calls within a single process.
+const _mintDecimalsCache = {};
+async function getMintDecimals(mintAddress) {
+  if (_mintDecimalsCache[mintAddress] !== undefined) return _mintDecimalsCache[mintAddress];
+  const { getMint, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+  return withFallback(async (connection) => {
+    const info = await getMint(connection, new PublicKey(mintAddress), 'confirmed', TOKEN_2022_PROGRAM_ID);
+    _mintDecimalsCache[mintAddress] = info.decimals;
+    return info.decimals;
+  });
+}
+
 // Return user's Solana USDC balance (for gas-path decision).
 async function getUserSolUsdcBalance(solAddress) {
   if (!solAddress) return 0;
@@ -772,6 +825,7 @@ module.exports = {
   submitJupiterBuyTransaction,
   ensureUserUsdcAta,
   getUserUsdcAta,
+  getMintDecimals,
   getUserSolUsdcBalance,
   buildSolUsdcTransferToAgent,
   buildSolGasTopupTransaction,
