@@ -183,14 +183,12 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
     // requires ~0.003 SOL in rent. Auto-topup from USDC via Jupiter if underfunded.
     const agentSolBalance = await connection.getBalance(agentKeypair.publicKey);
     const MIN_SOL_FOR_CCTP = 4_000_000;
-    let effectiveUsdcAmount = rawUsdcAmount;
+    const effectiveUsdcAmount = rawUsdcAmount;
     if (agentSolBalance < MIN_SOL_FOR_CCTP) {
       console.log(`Agent SOL low (${(agentSolBalance/1e9).toFixed(6)}), swapping USDC → SOL for gas...`);
       try {
         const USDC_MINT_ADDR = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
         const WSOL_MINT_ADDR = 'So11111111111111111111111111111111111111112';
-        // ExactIn with a fixed $1.50 USDC input (~0.01 SOL at $150/SOL, well above the 0.004 minimum).
-        // ExactOut was failing: Jupiter's computed input often exceeded the available balance.
         const TOPUP_USDC = 1_500_000; // 1.50 USDC
         const usdcAvail = parseInt((await connection.getTokenAccountBalance(burnTokenAccount)).value.amount, 10);
         const swapInputUsdc = Math.min(TOPUP_USDC, Math.floor(usdcAvail * 0.5));
@@ -212,9 +210,6 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
         const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: true, maxRetries: 0 });
         await connection.confirmTransaction(sig, 'confirmed');
         console.log(`SOL topup complete: ${sig}`);
-        const usdcInfo = await connection.getTokenAccountBalance(burnTokenAccount);
-        effectiveUsdcAmount = parseInt(usdcInfo.value.amount, 10);
-        console.log(`USDC balance after topup: ${effectiveUsdcAmount} μUSDC`);
       } catch (e) {
         throw new Error(
           `Agent wallet has insufficient SOL for CCTP bridge (${(agentSolBalance/1e9).toFixed(6)} SOL) ` +

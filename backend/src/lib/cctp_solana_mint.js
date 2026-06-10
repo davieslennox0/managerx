@@ -149,46 +149,57 @@ async function receiveMessageOnSolana(messageHex, attestationHex) {
       provider
     );
 
-    const tx = await messageTransmitterProgram.methods
-      .receiveMessage({
-        message: messageBytes,
-        attestation: attestationBytes,
-      })
-      .accounts({
-        payer: agentKeypair.publicKey,
-        caller: agentKeypair.publicKey,
-        authorityPda: authorityPDA,
-        messageTransmitter: messageTransmitterPDA,
-        usedNonces: usedNoncePDA,
-        receiver: TOKEN_MESSENGER_MINTER_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        eventAuthority: PublicKey.findProgramAddressSync(
-          [Buffer.from('__event_authority')],
-          MESSAGE_TRANSMITTER_PROGRAM_ID
-        )[0],
-        program: MESSAGE_TRANSMITTER_PROGRAM_ID,
-      })
-      .remainingAccounts([
-        { pubkey: tokenMessengerPDA, isWritable: false, isSigner: false },
-        { pubkey: remoteTokenMessengerPDA, isWritable: false, isSigner: false },
-        { pubkey: tokenMinterPDA, isWritable: true, isSigner: false },
-        { pubkey: localTokenPDA, isWritable: true, isSigner: false },
-        { pubkey: tokenPairPDA, isWritable: false, isSigner: false },
-        { pubkey: recipientTokenAccount, isWritable: true, isSigner: false },
-        { pubkey: custodyTokenPDA, isWritable: true, isSigner: false },
-        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
-        {
-          pubkey: PublicKey.findProgramAddressSync(
+    let tx;
+    try {
+      tx = await messageTransmitterProgram.methods
+        .receiveMessage({
+          message: messageBytes,
+          attestation: attestationBytes,
+        })
+        .accounts({
+          payer: agentKeypair.publicKey,
+          caller: agentKeypair.publicKey,
+          authorityPda: authorityPDA,
+          messageTransmitter: messageTransmitterPDA,
+          usedNonces: usedNoncePDA,
+          receiver: TOKEN_MESSENGER_MINTER_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          eventAuthority: PublicKey.findProgramAddressSync(
             [Buffer.from('__event_authority')],
-            TOKEN_MESSENGER_MINTER_PROGRAM_ID
+            MESSAGE_TRANSMITTER_PROGRAM_ID
           )[0],
-          isWritable: false,
-          isSigner: false,
-        },
-        { pubkey: TOKEN_MESSENGER_MINTER_PROGRAM_ID, isWritable: false, isSigner: false },
-      ])
-      .signers([agentKeypair])
-      .rpc();
+          program: MESSAGE_TRANSMITTER_PROGRAM_ID,
+        })
+        .remainingAccounts([
+          { pubkey: tokenMessengerPDA, isWritable: false, isSigner: false },
+          { pubkey: remoteTokenMessengerPDA, isWritable: false, isSigner: false },
+          { pubkey: tokenMinterPDA, isWritable: true, isSigner: false },
+          { pubkey: localTokenPDA, isWritable: true, isSigner: false },
+          { pubkey: tokenPairPDA, isWritable: false, isSigner: false },
+          { pubkey: recipientTokenAccount, isWritable: true, isSigner: false },
+          { pubkey: custodyTokenPDA, isWritable: true, isSigner: false },
+          { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+          {
+            pubkey: PublicKey.findProgramAddressSync(
+              [Buffer.from('__event_authority')],
+              TOKEN_MESSENGER_MINTER_PROGRAM_ID
+            )[0],
+            isWritable: false,
+            isSigner: false,
+          },
+          { pubkey: TOKEN_MESSENGER_MINTER_PROGRAM_ID, isWritable: false, isSigner: false },
+        ])
+        .signers([agentKeypair])
+        .rpc();
+    } catch (e) {
+      // Nonce already used means a previous call landed on-chain — treat as success.
+      const msg = (e?.message || '').toLowerCase();
+      if (msg.includes('nonce') && (msg.includes('already') || msg.includes('used'))) {
+        console.log('receiveMessageOnSolana: nonce already used — USDC already minted');
+        return { txHash: null, status: 'already_minted' };
+      }
+      throw e;
+    }
 
     console.log('USDC minted on Solana:', tx);
     return { txHash: tx, status: 'minted' };

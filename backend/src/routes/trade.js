@@ -239,33 +239,38 @@ router.post('/execute', async (req, res) => {
           console.log('Step 2: Polling attestation...');
           const attestation = await pollAttestation(messageHash);
 
-          // Step 3: Mint USDC on Solana
-          console.log('Step 3: Minting on Solana...');
-          await receiveMessageOnSolana(messageHex, attestation);
-
-          // Step 4: Swap on Jupiter (gas check first — USDC is now in agent wallet)
-          console.log('Step 4: Checking gas + swapping on Jupiter...');
+          // Step 3: Gas check BEFORE minting — if this fails, burn tx is still redeemable
+          // by retrying /execute with the same suiTxHash once gas is resolved.
+          console.log('Step 3: Checking gas...');
           const gasStatus = await ensureGas();
           if (!gasStatus.ok) {
             return res.status(402).json({
               error: 'GAS_INSUFFICIENT',
               needsBridge: true,
+              suiTxHash,
               solBalance: gasStatus.solBalance,
               usdcBalance: gasStatus.usdcBalance,
             });
           }
+
+          // Step 4: Mint USDC on Solana (idempotent — already-minted nonce is treated as success)
+          console.log('Step 4: Minting USDC on Solana...');
+          await receiveMessageOnSolana(messageHex, attestation);
+
+          // Step 5: Swap on Jupiter
+          console.log('Step 5: Swapping on Jupiter...');
           const swap = await jupiterSwap(process.env.AGENT_SOL_ADDRESS, symbol, usdcAmount);
           txHash = swap.txHash;
           console.log('Swap complete:', txHash);
 
-          // Step 5: Transfer xStock tokens from agent wallet to user's Solana address
+          // Step 6: Transfer xStock tokens from agent wallet to user's Solana address
           const userSolAddress = db.prepare('SELECT sol_address FROM users WHERE id = ?').get(user.id)?.sol_address;
           if (userSolAddress) {
-            console.log('Step 5: Transferring xStock to user:', userSolAddress);
+            console.log('Step 6: Transferring xStock to user:', userSolAddress);
             const transferTx = await transferXStockToUser(swap.mintAddress, userSolAddress, swap.rawOutputAmount);
             console.log('Transfer complete:', transferTx);
           } else {
-            console.warn('Step 5: No sol_address for user', user.id, '— tokens remain in agent wallet');
+            console.warn('Step 6: No sol_address for user', user.id, '— tokens remain in agent wallet');
           }
         }
       }
@@ -349,6 +354,17 @@ router.post('/build-burn', async (req, res) => {
   const { amount, currency, suiAddress } = req.body;
   
   try {
+    // Pre-check: ensure agent has enough SOL to complete the Solana side before the user burns.
+    const gasStatus = await ensureGas();
+    if (!gasStatus.ok) {
+      return res.status(402).json({
+        error: 'GAS_INSUFFICIENT',
+        needsBridge: true,
+        solBalance: gasStatus.solBalance,
+        usdcBalance: gasStatus.usdcBalance,
+      });
+    }
+
     const { Transaction } = require('@mysten/sui/transactions');
     const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
 
@@ -438,7 +454,7 @@ router.post('/bridge-to-solana', async (req, res) => {
     const { receiveMessageOnSolana } = require('../lib/cctp_solana_mint');
     const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
     const { ethers } = require('ethers');
-    const { PublicKey, Keypair, Transaction: SolTx } = require('@solana/web3.js');
+    const { PublicKey, Keypair, Transaction: SolTx, ComputeBudgetProgram } = require('@solana/web3.js');
     const {
       getOrCreateAssociatedTokenAccount,
       createTransferInstruction,
@@ -496,6 +512,8 @@ router.post('/bridge-to-solana', async (req, res) => {
 
       const { blockhash } = await connection.getLatestBlockhash('confirmed');
       const tx = new SolTx({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
+      tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
+      tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }));
       tx.add(ix);
       tx.sign(agentKeypair);
 
@@ -524,8 +542,10 @@ router.post('/recover-solana-usdc', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { userSuiAddress } = req.body;
+  // rawAmount: exact μUSDC to recover (required). Never bridge more than the user's own amount.
+  const { userSuiAddress, rawAmount } = req.body;
   if (!userSuiAddress) return res.status(400).json({ error: 'Missing userSuiAddress' });
+  if (!rawAmount || rawAmount <= 0) return res.status(400).json({ error: 'Missing or invalid rawAmount' });
 
   try {
     const { getConnection: _getSolConn } = require('../lib/solana_connection');
@@ -534,19 +554,20 @@ router.post('/recover-solana-usdc', async (req, res) => {
 
     const usdcATA = new _PublicKey(process.env.AGENT_SOL_USDC_ATA);
     const balanceInfo = await connection.getTokenAccountBalance(usdcATA);
-    const rawBalance = parseInt(balanceInfo.value.amount, 10);
+    const agentBalance = parseInt(balanceInfo.value.amount, 10);
 
-    if (rawBalance === 0) {
+    if (agentBalance === 0) {
       return res.json({ success: true, message: 'No USDC found on Solana agent wallet', balance: 0 });
     }
 
-    console.log(`Recovering ${rawBalance} μUSDC from Solana → Sui (${userSuiAddress})`);
-    const result = await bridgeUsdcSolanaToSui(rawBalance, userSuiAddress);
+    const bridgeAmount = Math.min(rawAmount, agentBalance);
+    console.log(`Recovering ${bridgeAmount} μUSDC from Solana → Sui (${userSuiAddress})`);
+    const result = await bridgeUsdcSolanaToSui(bridgeAmount, userSuiAddress);
 
     res.json({
       success: true,
-      message: `Bridged ${(rawBalance / 1e6).toFixed(6)} USDC from Solana to your Sui wallet`,
-      usdcAmount: rawBalance / 1e6,
+      message: `Bridged ${(bridgeAmount / 1e6).toFixed(6)} USDC from Solana to your Sui wallet`,
+      usdcAmount: bridgeAmount / 1e6,
       ...result,
     });
   } catch (e) {

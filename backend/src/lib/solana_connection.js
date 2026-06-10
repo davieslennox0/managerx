@@ -4,6 +4,8 @@ const { Connection } = require('@solana/web3.js');
 // are public fallbacks used only when the primary returns 403/429.
 const RPC_URLS = [
   process.env.SOLANA_RPC_URL,
+  'https://api.mainnet-beta.solana.com',
+  'https://solana-mainnet.rpc.extrnode.com',
 ].filter(Boolean);
 
 function getConnection() {
