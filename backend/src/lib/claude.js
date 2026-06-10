@@ -41,16 +41,45 @@ const CHAIN_CONTEXT = {
   },
 };
 
+const EXECUTE_TOOL = {
+  name: 'execute_action',
+  description: 'Execute a buy, sell, or bridge action. Call this tool whenever the user wants to trade or move USDC. Do NOT validate balances yourself — call the tool and the backend handles all validation.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['buy', 'sell', 'bridge'],
+        description: 'buy = purchase an xStock with USDC; sell = sell an xStock for USDC returned to Sui; bridge = move USDC from Sui to Solana without trading',
+      },
+      symbol: {
+        type: 'string',
+        description: 'xStock symbol e.g. TSLAx, NVDAx. Required for buy/sell. Omit for bridge.',
+      },
+      amount: {
+        type: 'number',
+        description: 'Dollar amount in USD',
+      },
+      currency: {
+        type: 'string',
+        enum: ['usd'],
+        default: 'usd',
+      },
+    },
+    required: ['action', 'amount'],
+  },
+};
+
 async function chat({ messages, chain, portfolio }) {
   const ctx = CHAIN_CONTEXT[chain] || CHAIN_CONTEXT.arbitrum;
 
   const crossChain = portfolio.crossChain;
   const crossChainSummary = crossChain ? `
-Wallet addresses (active platform — Sui + Solana only):
+Wallet addresses:
 - Sui address: ${crossChain.sui.address || 'not connected'} — $${crossChain.sui.usdcBalance.toFixed(2)} USDC
-- Solana address: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}` : '';
+- Solana address: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}
+- USDC ready to trade (agent wallet): $${(crossChain.agentUsdcBalance || 0).toFixed(2)}` : '';
 
-  // Strip crossChain from active portfolio before showing it (it's already in the summary above)
   const activePortfolio = { ...portfolio };
   delete activePortfolio.crossChain;
 
@@ -64,45 +93,41 @@ ${crossChainSummary}
 Current portfolio (active chain):
 ${JSON.stringify(activePortfolio, null, 2)}
 
-IMPORTANT INSTRUCTIONS:
-- You DO have access to real-time price data for major stocks via our price feed
-- When asked about prices, use the portfolio context above which includes live prices
-- You CAN execute trades — when user wants to buy/sell, respond with the JSON action block
-- Never say you don't have access to prices or can't execute trades
-- For the full catalog of 1,997 Robinhood tokenized stocks, direct users to robinhood.com/stocks
-- Always confirm trade details before executing large amounts (>$100)
-- Amounts under $100 can be executed immediately with the JSON action
-- CRITICAL: Never claim a trade is confirmed or complete until the backend explicitly confirms it. Trades on the Sui chain involve multi-step cross-chain operations (CCTP bridge + Jupiter swap) and take 30–60 seconds to settle. Say "your trade is being processed" until you receive confirmation from the backend.
-- When a user sells on the Sui chain: USDC is returned to their Sui wallet via CCTP bridge. This takes 30–60 seconds. Do not claim the USDC has arrived until the backend confirms.
-- CRITICAL: When a user asks to "sell all" or "sell everything", you MUST sell each position individually with a separate JSON action block per symbol. NEVER use "ALL" or any placeholder as a symbol — it is not a valid xStock. If the user has NVDAx and AAPLx, respond with two separate sell actions (one at a time), not a single "sell ALL" action.
-- CRITICAL BALANCE RULE: The "Current portfolio" block above is fetched LIVE from the blockchain every single message. It is always accurate. ALWAYS use usdcBalance from that block as the user's balance — never reference or repeat balance figures from earlier in the conversation, as those are stale. Before every buy, state the live usdcBalance from the portfolio context.
-- CRITICAL BALANCE RULE: When the user asks for their balance or portfolio, read it ONLY from the "Current portfolio" context above — never from chat history.
-- When the user asks for "my address" or "my wallet", show both the Sui address (for USDC deposits) and the Solana address (for tracking xStock holdings). Never mention any Arbitrum address.
+INSTRUCTIONS:
+- You have real-time price data via the portfolio context above
+- When the user wants to buy, sell, or bridge — call the execute_action tool immediately. Do NOT refuse based on your own balance calculations. The backend validates all balances and will return an error if something is wrong.
+- "USDC ready to trade (agent wallet)" is USDC the user has already deposited and is available for buys, in addition to their Sui wallet balance.
+- Never say you can't execute trades or don't have prices
+- Always confirm before executing trades over $100
+- Under $100 execute immediately via the tool
+- When user sells on Sui chain: USDC returns to their Sui wallet via CCTP (30–60s). Say "processing" until backend confirms.
+- When user asks "sell all": call execute_action once per position with individual amounts
+- When user asks for their address: show both Sui (for deposits) and Solana (for xStock holdings)
+- BALANCE RULE: Always read balances from the portfolio context above — never from chat history
 
-You help users:
-- Buy and sell tokenized stocks conversationally
-- Analyze their portfolio performance
-- Suggest allocations based on their goals
-- Execute trades by returning structured JSON actions
-
-When the user wants to trade, respond with your analysis AND include this EXACT format at the end:
-\`\`\`json
-{"action": "buy", "symbol": "AAPLX", "amount": 100, "currency": "usd"}
-\`\`\`
-For sell: {"action": "sell", "symbol": "TSLAx", "amount": 50, "currency": "usd"}
-For bridge (move USDC from Sui to Solana without trading): {"action": "bridge", "amount": 1, "currency": "usd"}
-CRITICAL: Always wrap the JSON in triple backticks with json tag. Never output raw JSON without backticks.
-
-Keep responses concise. Always confirm before executing large trades.`;
+You help users buy/sell tokenized stocks, analyze portfolios, and execute trades.
+Keep responses concise.`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 1024,
+    tools: [EXECUTE_TOOL],
+    tool_choice: { type: 'auto' },
     system,
     messages,
   });
 
-  return response.content[0].text;
+  let text = '';
+  let action = null;
+
+  for (const block of response.content) {
+    if (block.type === 'text') text += block.text;
+    if (block.type === 'tool_use' && block.name === 'execute_action') {
+      action = block.input;
+    }
+  }
+
+  return { reply: text.trim(), action };
 }
 
 module.exports = { chat };

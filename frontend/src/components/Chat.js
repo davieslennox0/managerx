@@ -51,13 +51,6 @@ function ConfirmModal({ action, onConfirm, onCancel }) {
   );
 }
 
-const parseAction = (text) => {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/);
-  if (fenced) { try { return JSON.parse(fenced[1]); } catch {} }
-  const raw = text.match(/\{[\s\S]*?"action"[\s\S]*?"symbol"[\s\S]*?\}/);
-  if (raw) { try { return JSON.parse(raw[0]); } catch {} }
-  return null;
-};
 
 export default function Chat({ user, chain }) {
   const userWallets = useUserWallets();
@@ -86,8 +79,8 @@ export default function Chat({ user, chain }) {
     try {
       const { data } = await axios.post('/api/chat', { messages: newMessages, chain }, { headers: { Authorization: `Bearer ${token}` } });
       const reply = data.reply;
-      setMessages([...newMessages, { role: 'assistant', content: reply }]);
-      const action = parseAction(reply);
+      const action = data.action;
+      if (reply) setMessages([...newMessages, { role: 'assistant', content: reply }]);
       if (action?.action) setPendingAction(action);
     } catch {
       setMessages([...newMessages, { role: 'assistant', content: 'Something went wrong. Please try again.' }]);
@@ -376,8 +369,15 @@ export default function Chat({ user, chain }) {
     }
     setMessages(prev => [...prev, { role: 'assistant', content: '🔄 Checking for stuck USDC on Solana...' }]);
     try {
+      const { data: balData } = await axios.get('/api/trade/agent-usdc-balance',
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!balData.rawAmount) {
+        setMessages(prev => [...prev, { role: 'assistant', content: '✅ No stuck USDC found on Solana.' }]);
+        return;
+      }
       const { data } = await axios.post('/api/trade/recover-solana-usdc',
-        { userSuiAddress: suiAddress },
+        { userSuiAddress: suiAddress, rawAmount: balData.rawAmount },
         { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 }
       );
       setMessages(prev => [...prev, { role: 'assistant', content: `✅ ${data.message}` }]);

@@ -576,6 +576,20 @@ router.post('/recover-solana-usdc', async (req, res) => {
   }
 });
 
+// Returns the agent's USDC balance — used by the frontend RECOVER button
+router.get('/agent-usdc-balance', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { getAgentGasStatus } = require('../lib/solana');
+    const { usdcBalance } = await getAgentGasStatus();
+    const rawAmount = Math.round(usdcBalance * 1e6);
+    res.json({ usdcBalance, rawAmount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get transaction history
 router.get('/history', (req, res) => {
   const user = authUser(req);

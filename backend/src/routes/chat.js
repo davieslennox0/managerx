@@ -4,7 +4,7 @@ const { v4: uuid } = require('uuid');
 const db = require('../db');
 const { chat } = require('../lib/claude');
 const { getArbPortfolio } = require('../lib/arbitrum');
-const { getSolPortfolio } = require('../lib/solana');
+const { getSolPortfolio, getAgentGasStatus } = require('../lib/solana');
 const { getSuiPortfolio } = require('../lib/sui');
 const { getPrice } = require('./prices');
 
@@ -50,11 +50,12 @@ router.post('/', async (req, res) => {
   if (!messages?.length) return res.status(400).json({ error: 'No messages' });
 
   try {
-    // Fetch all chains in parallel so Claude sees assets everywhere
-    const [arbPortfolio, solPortfolio, suiPortfolio] = await Promise.all([
+    // Fetch all chains + agent balance in parallel
+    const [arbPortfolio, solPortfolio, suiPortfolio, agentStatus] = await Promise.all([
       user.evm_address ? getArbPortfolio(user.evm_address, user.id).catch(() => ({})) : Promise.resolve({}),
       user.sol_address ? getSolPortfolio(user.sol_address, user.id).catch(() => ({})) : Promise.resolve({}),
       user.sui_address ? getSuiPortfolio(user.sui_address, user.id).catch(() => ({})) : Promise.resolve({}),
+      getAgentGasStatus().catch(() => ({ usdcBalance: 0 })),
     ]);
 
     const crossChain = {
@@ -73,6 +74,7 @@ router.post('/', async (req, res) => {
         usdcBalance: suiPortfolio.usdcBalance || 0,
         positions: suiPortfolio.positions || [],
       },
+      agentUsdcBalance: agentStatus.usdcBalance || 0,
     };
 
     let portfolio = {};
@@ -105,16 +107,16 @@ router.post('/', async (req, res) => {
     const livePrices = priceResults.filter(Boolean).join(', ');
     portfolio.livePrices = livePrices;
 
-    const reply = await chat({ messages, chain, portfolio });
+    const { reply, action } = await chat({ messages, chain, portfolio });
 
     // Save last user message + reply
     const lastUser = messages[messages.length - 1];
     db.prepare('INSERT INTO conversations (id, user_id, chain, role, content) VALUES (?, ?, ?, ?, ?)')
       .run(uuid(), user.id, chain, 'user', lastUser.content);
     db.prepare('INSERT INTO conversations (id, user_id, chain, role, content) VALUES (?, ?, ?, ?, ?)')
-      .run(uuid(), user.id, chain, 'assistant', reply);
+      .run(uuid(), user.id, chain, 'assistant', reply || (action ? `Executing ${action.action}...` : ''));
 
-    res.json({ reply });
+    res.json({ reply, action });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Chat failed' });
