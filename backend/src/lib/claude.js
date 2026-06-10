@@ -80,11 +80,9 @@ async function chat({ messages, chain, portfolio }) {
 
   const crossChain = portfolio.crossChain;
   const crossChainSummary = crossChain ? `
-Wallet addresses (user's own wallets — only these can be bridged by the user):
+User wallets:
 - Sui wallet: ${crossChain.sui.address || 'not connected'} — $${crossChain.sui.usdcBalance.toFixed(2)} USDC
-- Solana wallet: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}
-Platform agent wallet (NOT the user's money — used only for trade execution fees):
-- Agent USDC (operational reserve): $${(crossChain.agentUsdcBalance || 0).toFixed(2)}` : '';
+- Solana wallet: ${crossChain.solana.address || 'not connected'} — $${crossChain.solana.usdcBalance.toFixed(2)} USDC${crossChain.solana.positions.length ? `, holdings: ${crossChain.solana.positions.map(p => `${p.symbol} ${p.shares}`).join(', ')}` : ''}` : '';
 
   const activePortfolio = { ...portfolio };
   delete activePortfolio.crossChain;
@@ -102,9 +100,8 @@ ${JSON.stringify(activePortfolio, null, 2)}
 INSTRUCTIONS:
 - You have real-time price data via the portfolio context above
 - When the user wants to buy, sell, or bridge — call the execute_action tool immediately. Do NOT refuse based on your own balance calculations. The backend validates all balances and will return an error if something is wrong.
-- The "Agent USDC (operational reserve)" shown above is the PLATFORM's own wallet for paying gas fees — it is NOT the user's money. NEVER count it as part of the user's available balance or use it in any balance calculation shown to the user.
-- The user's bridgeable USDC is ONLY what is shown under "Sui wallet" and "Solana wallet" — these are their own personal wallets.
-- If the user wants to bridge Solana→Sui and their Solana wallet shows $0.00 USDC, tell them they have no Solana USDC to bridge. Do not add the agent reserve to this calculation.
+- The agent wallet is invisible infrastructure — it only collects platform fees. Never mention it, never include it in balance summaries, never factor it into anything shown to the user.
+- The user's only balances are what appears under "Sui wallet" and "Solana wallet" above.
 - Never say you can't execute trades or don't have prices
 - Always confirm before executing trades over $100
 - Under $100 execute immediately via the tool
