@@ -1,39 +1,60 @@
-# Manager v2 — Multi-Chain AI Portfolio Agent
+# ManagerX — AI Portfolio Agent for Tokenized Stocks
 
-> Sui + Arbitrum · zkLogin · Privy · CCTP · Claude AI
+> Sui · Solana · CCTP · Jupiter · Claude AI · Dynamic
 
 ---
 
-## What's New in v2
+## Overview
 
-| Feature | v1 | v2 |
-|---------|----|----|
-| Auth | Email/password | Email + **Google OAuth (Privy)** + zkLogin |
-| Chains | Arbitrum only | **Arbitrum + Sui** |
-| Wallets | None | **Privy embedded EVM** + Sui zkLogin |
-| Bridge | None | **CCTP (Circle)** Sui → Arbitrum auto-bridge |
-| Stocks | Robinhood tokenized | Robinhood (ARB) + **stocksrwa.io (Sui)** |
-| AI | Claude basic | Claude with **chain-aware context + bridge logic** |
+ManagerX is a conversational portfolio agent that lets users buy and sell tokenized US stocks using USDC. Users interact via natural language — the AI executes trades, bridges funds cross-chain, and manages the full lifecycle without the user touching raw transactions.
+
+**Supported assets:** 74 xStocks by Backed Finance (Kraken) — TSLAx, NVDAx, AAPLx, SPYx, QQQx, COINx, MSTRx, CRCLx, and 66+ more. All 1:1 backed by real shares, tradeable 24/7.
+
+---
+
+## How It Works
+
+```
+User says "buy $50 of TSLAx"
+         ↓
+Claude calls execute_action tool (structured, no text parsing)
+         ↓
+Frontend shows confirmation modal
+         ↓
+User approves → Frontend builds CCTP burn tx on Sui
+         ↓
+Agent sponsors gas (user pays zero SUI)
+         ↓
+User signs → USDC burned on Sui
+         ↓
+Backend polls Circle attestation (~10–30s)
+         ↓
+USDC minted on Solana (agent ATA)
+         ↓
+Jupiter swap: USDC → TSLAx
+         ↓
+xStock transferred to user's Solana wallet
+```
+
+Selling reverses the flow: xStock → agent → Jupiter swap → CCTP → USDC on Sui.
 
 ---
 
 ## Architecture
 
-```
-Google Login (Privy)
-       ↓
-Privy creates EVM wallet (Arbitrum)     zkLogin creates Sui wallet
-       ↓                                        ↓
-Manager links both wallets to one email in DB
-       ↓
-User says "Buy 5 NVDAX"
-       ↓
-Claude checks: ARB USDC balance sufficient?
-  YES → Execute trade on Arbitrum (Robinhood tokenized)
-  NO  → Check Sui USDC balance
-          YES → CCTP bridge Sui→ARB automatically → Execute trade
-          NO  → "Insufficient funds on both chains"
-```
+| Layer | Tech |
+|-------|------|
+| Frontend | React 18, Dynamic SDK |
+| Backend | Node.js, Express, SQLite (better-sqlite3) |
+| AI | Claude claude-sonnet-4-6 with tool use |
+| Auth | Dynamic (Google OAuth + embedded wallets) |
+| Sui chain | Sui Mainnet |
+| Solana chain | Solana Mainnet |
+| Bridge | Circle CCTP V1 (Sui ↔ Solana) |
+| Trade execution | Jupiter aggregator |
+| Gas sponsorship | Agent-sponsored Sui transactions (user needs no SUI) |
+| Trade receipts | Walrus (immutable on-chain storage) |
+| xStocks | Backed Finance / Kraken (Token-2022 on Solana) |
 
 ---
 
@@ -42,70 +63,77 @@ Claude checks: ARB USDC balance sufficient?
 ### 1. Install
 
 ```bash
-# Backend
 cd backend && npm install
-
-# Frontend
 cd ../frontend && npm install
 ```
 
-### 2. Configure Backend
+### 2. Configure
 
 ```bash
-cp .env.example .env
-nano .env
+cp backend/.env.example backend/.env
 ```
 
-Required:
+Required env vars:
+
 ```
-ANTHROPIC_API_KEY=your_key
-ANTHROPIC_BASE_URL=https://cc.freemodel.dev
-JWT_SECRET=random_string
-PRIVY_APP_ID=cmpeku47e000l0ci6ejcg63m5
-PRIVY_SECRET=privy_app_secret_4YcFn...
-TRADE_MODE=mock
+ANTHROPIC_API_KEY=
+JWT_SECRET=
+
+# Dynamic
+DYNAMIC_ENV_ID=
+
+# Solana
+SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...
+AGENT_SOL_PRIVATE_KEY=        # base58 — agent keypair
+AGENT_SOL_ADDRESS=            # agent Solana pubkey
+AGENT_SOL_USDC_ATA=           # agent's USDC associated token account
+
+# Sui
+SUI_RPC_URL=https://fullnode.mainnet.sui.io
+SUI_AGENT_PRIVATE_KEY=        # suiprivkey1... format
+SUI_PACKAGE_ID=
+SUI_MANAGER_STATE=
+SUI_ADMIN_CAP=
+
+# Walrus receipts
+RECEIPTS_PACKAGE_ID=
+RECEIPTS_REGISTRY_ID=
+WALRUS_AGGREGATOR_URL=https://aggregator.walrus.space
+WALRUS_PUBLISHER_URL=https://publisher.walrus.space
+
+TRADE_MODE=live               # mock | live
+PLATFORM_FEE_BPS=75
 ```
 
-### 3. Run Backend
+### 3. Run
 
 ```bash
-cd backend && npm start
-# → http://localhost:4000
-```
+# Backend
+cd backend && npm start        # → http://localhost:4000
 
-### 4. Run Frontend
-
-```bash
+# Frontend
 cd frontend && npm run build
-# Serve build folder via Caddy / serve
+pm2 serve build 3000 --name manager-frontend --spa
 ```
 
 ---
 
-## Deploying to managerx.duckdns.org
-
-### Backend (pm2)
+## Deployment (pm2 + Caddy)
 
 ```bash
-cd backend
-pm2 delete manager-backend 2>/dev/null
-pm2 start src/index.js --name manager-backend
+# Backend
+pm2 start backend/src/index.js --name manager-backend
 pm2 save
-```
 
-### Frontend (static build)
-
-```bash
-cd frontend
-npm run build
+# Frontend
+cd frontend && npm run build
 pm2 serve build 3000 --name manager-frontend --spa
-# OR update Caddy to serve build/ directly
 ```
 
-### Caddy config
+Caddy config:
 
 ```
-managerx.duckdns.org {
+yourdomain.com {
     encode gzip
 
     handle /api/* {
@@ -113,7 +141,7 @@ managerx.duckdns.org {
     }
 
     handle {
-        root * /root/manager-v2/frontend/build
+        root * /path/to/frontend/build
         try_files {path} /index.html
         file_server
     }
@@ -122,93 +150,45 @@ managerx.duckdns.org {
 
 ---
 
-## Smart Contracts
+## CCTP Bridge Flow (Sui → Solana)
 
-### Arbitrum (Solidity + Foundry)
+1. Frontend builds a `deposit_for_burn` transaction on Sui
+2. Agent sponsors gas — user signs without needing any SUI
+3. USDC is burned on Sui; Circle emits a CCTP message
+4. Backend polls Circle Iris API for attestation (~10–30s)
+5. `receiveMessage` called on Solana — USDC minted to agent ATA
+6. Jupiter swaps USDC → xStock; agent transfers xStock to user's Solana wallet
 
-```bash
-cd contracts-arb
-forge install
-forge test -v
+The reverse (Solana → Sui) uses the same protocol in the other direction for sells.
 
-# Deploy to Arbitrum Sepolia
-forge script script/Deploy.s.sol \
-  --rpc-url https://sepolia-rollup.arbitrum.io/rpc \
-  --private-key $PRIVATE_KEY \
-  --broadcast --verify
-```
-
-### Sui (Move)
-
-```bash
-cd contracts-sui
-
-# Install Sui CLI: https://docs.sui.io/guides/developer/getting-started/sui-install
-
-# Build
-sui move build
-
-# Test
-sui move test
-
-# Deploy to Sui Mainnet
-sui client publish --gas-budget 100000000
-```
+**Recovery:** If the attestation completes but the Solana-side claim fails, the CCTP message stays valid for 90 days. The backend automatically handles idempotent re-claims — re-submitting with the same `suiTxHash` is safe.
 
 ---
 
-## CCTP Bridge Flow
+## AI Tool Use
 
-1. User has USDC on Sui, wants to buy stock on Arbitrum
-2. Manager AI detects insufficient ARB balance
-3. Agent calls `initiate_bridge` on Sui contract → emits burn event
-4. Circle attestation service signs the burn (~15-30s)
-5. Backend calls `receiveMessage` on Arbitrum transmitter
-6. USDC minted on Arbitrum to user's Privy EVM wallet
-7. Trade executes automatically
+Claude uses a structured `execute_action` tool instead of generating JSON-in-markdown. This means:
 
-**Circle CCTP docs:** https://developers.circle.com/stablecoins/cctp-getting-started
+- No fragile regex parsing on the frontend
+- The AI cannot refuse a trade based on its own balance calculations — it calls the tool and the backend validates
+- The agent USDC balance (funds already deposited and ready to trade) is visible to the AI alongside wallet balances
 
 ---
 
-## zkLogin Flow (Sui)
+## Key API Routes
 
-1. User clicks "Sign in with Google"
-2. OAuth JWT issued by Google
-3. Sui zkLogin derives deterministic Sui address from JWT + salt
-4. No seed phrase, no private key management
-5. Privy simultaneously creates matching EVM wallet for Arbitrum
-
-**Sui zkLogin docs:** https://docs.sui.io/concepts/cryptography/zklogin
-
----
-
-## Privy Setup
-
-1. Go to https://privy.io → create app
-2. Enable Google OAuth under Login Methods
-3. Enable Ethereum embedded wallets with "Create on login"
-4. Copy App ID + Secret to .env
+| Method | Route | Description |
+|--------|-------|-------------|
+| POST | `/api/chat` | Send message, returns `{ reply, action }` |
+| POST | `/api/trade/build-burn` | Build Sui CCTP burn tx for user to sign |
+| POST | `/api/trade/execute` | Execute buy/sell after user signature |
+| POST | `/api/trade/build-sell-transfer` | Build Solana xStock transfer tx for sell |
+| POST | `/api/trade/submit-sell-transfer` | Countersign + submit sell transfer |
+| POST | `/api/trade/bridge-to-solana` | Bridge USDC Sui→Solana (no trade) |
+| POST | `/api/trade/recover-solana-usdc` | Recover stuck USDC from agent wallet |
+| GET  | `/api/trade/agent-usdc-balance` | Check agent's pending USDC balance |
+| GET  | `/api/portfolio/:chain` | Fetch live portfolio for a chain |
 
 ---
 
-## Stack
-
-| Layer | Tech |
-|-------|------|
-| Frontend | React 18, Privy SDK |
-| Backend | Node.js, Express, SQLite |
-| AI | Anthropic Claude (claude-sonnet-4-6) |
-| Auth | Privy (Google OAuth + embedded wallets) |
-| Sui Auth | zkLogin |
-| Bridge | Circle CCTP |
-| ARB Chain | Arbitrum One |
-| Sui Chain | Sui Mainnet |
-| ARB Stocks | Robinhood tokenized (1,997 assets) |
-| Sui Stocks | stocksrwa.io (AAPL, TSLA, NVDA, MSFT, GOOGL, AMZN, SPY, MSTR) |
-| ARB Contract | Solidity 0.8.24, Foundry |
-| Sui Contract | Move 2024, Sui CLI |
-
----
-
-Built for **Arbitrum Open House Buildathon** · May 2026
+Built June 2026
