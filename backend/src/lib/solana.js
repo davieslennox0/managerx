@@ -6,10 +6,10 @@ const { withFallback } = require('./solana_connection');
 const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
 
-// Gas management: keep 0.001 SOL on hand; top up with $0.50 USDC when low.
-// NOTE: the very first CCTP receive on Solana requires an initial ~0.005 SOL
-// seed from the platform. After that this system is self-sustaining.
-const GAS_MIN_LAMPORTS  = 1_000_000; // 0.001 SOL — trigger top-up below this
+// Gas management: keep 0.005 SOL on hand — enough to cover CCTP depositForBurn
+// rent (~0.003 SOL) plus normal tx fees. Top up with $0.50 USDC when low.
+// NOTE: the very first CCTP receive on Solana requires an initial seed from the platform.
+const GAS_MIN_LAMPORTS  = 5_000_000; // 0.005 SOL — trigger top-up below this
 const GAS_TOPUP_USDC   = 0.50;      // swap $0.50 USDC → SOL on each top-up
 const GAS_SWAP_MIN_SOL = 5_000;     // minimum SOL needed to pay for the topup swap itself
 

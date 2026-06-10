@@ -207,8 +207,21 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
         const { VersionedTransaction } = require('@solana/web3.js');
         const swapTx = VersionedTransaction.deserialize(Buffer.from(swapRes.data.swapTransaction, 'base64'));
         swapTx.sign([agentKeypair]);
-        const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: true, maxRetries: 0 });
-        await connection.confirmTransaction(sig, 'confirmed');
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+        const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: true, maxRetries: 3 });
+        try {
+          const conf = await connection.confirmTransaction(
+            { signature: sig, blockhash, lastValidBlockHeight },
+            'confirmed'
+          );
+          if (conf.value.err) throw new Error(`Swap failed on-chain: ${JSON.stringify(conf.value.err)}`);
+        } catch (confErr) {
+          // If confirmation timed out, check whether the balance actually increased —
+          // the tx may have landed despite the timeout.
+          const newBalance = await connection.getBalance(agentKeypair.publicKey);
+          if (newBalance <= agentSolBalance) throw confErr;
+          console.log(`SOL topup confirmation timed out but balance increased — continuing (${sig})`);
+        }
         console.log(`SOL topup complete: ${sig}`);
       } catch (e) {
         throw new Error(
