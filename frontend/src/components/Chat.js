@@ -74,6 +74,7 @@ export default function Chat({ user, chain }) {
   const [pendingAction, setPendingAction] = useState(null);
   const [gasApprovalNeeded, setGasApprovalNeeded] = useState(false);
   const [pendingRetry, setPendingRetry] = useState(null);
+  const [gasSolUsdcBalance, setGasSolUsdcBalance] = useState(0);
   const token = localStorage.getItem('managerx_token');
 
   useEffect(() => {
@@ -322,12 +323,14 @@ export default function Chat({ user, chain }) {
     } catch (e) {
       const errCode = e.response?.data?.error;
       if (errCode === 'GAS_INSUFFICIENT') {
+        const solUsdc = e.response?.data?.userSolUsdcBalance || 0;
+        setGasSolUsdcBalance(solUsdc);
         setPendingRetry(action);
         setGasApprovalNeeded(true);
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `⚠️ Your Solana wallet needs gas fees ($0.50 USDC) to process this transaction. Approve transferring $1 USDC from Sui to Solana to fund it?`,
-        }]);
+        const msg = solUsdc >= 1
+          ? `⚠️ Agent needs gas. You have $${solUsdc.toFixed(2)} USDC on Solana — approve a $1 transfer from your Solana wallet to fund it? (no bridge needed)`
+          : `⚠️ Agent needs gas. You have $${solUsdc.toFixed(2)} USDC on Solana — approve transferring $1 USDC from your Sui wallet to Solana to fund it?`;
+        setMessages(prev => [...prev, { role: 'assistant', content: msg }]);
         return;
       }
       const rootMsg = e.cause?.cause?.message || e.cause?.message || e.response?.data?.error || e.message;
@@ -343,6 +346,48 @@ export default function Chat({ user, chain }) {
     setGasApprovalNeeded(false);
     setLoading(true);
     try {
+      const solWallet = userWallets?.find(w => isSolanaWallet(w));
+
+      // ── Path A: user has Solana USDC — Solana-native transfer, no bridge ──
+      if (gasSolUsdcBalance >= 1 && solWallet) {
+        const { data: buildData } = await axios.post('/api/trade/build-sol-gas-topup', {}, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        const txBytes = Uint8Array.from(atob(buildData.txBase64), c => c.charCodeAt(0));
+        const solTx = SolTransaction.from(txBytes);
+
+        let userSignedTxBase64;
+        const solConnector = solWallet._connector;
+        if (solConnector && typeof solConnector.internalSignTransaction === 'function') {
+          if (typeof solConnector.setActiveAccountAddress === 'function') {
+            solConnector.setActiveAccountAddress(solWallet.address);
+          }
+          const signed = await solConnector.internalSignTransaction(solTx);
+          userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
+        } else {
+          const signer = await solWallet.getSigner();
+          const signed = await signer.signTransaction(solTx);
+          userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
+        }
+
+        setMessages(prev => [...prev, { role: 'assistant', content: '🔄 Solana USDC transfer signed. Funding gas...' }]);
+
+        await axios.post('/api/trade/submit-sol-gas-topup', {
+          signedTx: userSignedTxBase64,
+          blockhash: buildData.blockhash,
+          lastValidBlockHeight: buildData.lastValidBlockHeight,
+        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 });
+
+        const retry = pendingRetry;
+        setPendingRetry(null);
+        setGasSolUsdcBalance(0);
+        setMessages(prev => [...prev, { role: 'assistant', content: '✅ Gas funded from Solana! Retrying your trade...' }]);
+        if (retry) setPendingAction(retry);
+        return;
+      }
+
+      // ── Path B: not enough Solana USDC — bridge $1 from Sui ──
       let suiWallet = userWallets?.find(w => isSuiWallet(w));
       if (!suiWallet && primaryWallet && isSuiWallet(primaryWallet)) suiWallet = primaryWallet;
       if (!suiWallet) throw new Error('Sui wallet not connected. Please reconnect.');

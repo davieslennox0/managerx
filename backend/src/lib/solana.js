@@ -674,6 +674,83 @@ async function submitJupiterBuyTransaction(userSignedTxBase64, blockhash, lastVa
   });
 }
 
+// Return user's Solana USDC balance (for gas-path decision).
+async function getUserSolUsdcBalance(solAddress) {
+  if (!solAddress) return 0;
+  try {
+    return await withFallback(async (connection) => {
+      const accounts = await connection.getParsedTokenAccountsByOwner(
+        new PublicKey(solAddress),
+        { mint: new PublicKey(USDC_SOL) }
+      );
+      return accounts.value.reduce((acc, a) =>
+        acc + (a.account.data.parsed.info.tokenAmount.uiAmount || 0), 0
+      );
+    });
+  } catch { return 0; }
+}
+
+// Build an unsigned tx to transfer $1 USDC from user's ATA → agent's USDC ATA.
+// Agent is fee payer so the user needs no SOL. After signing, call submitSolGasTopup.
+async function buildSolGasTopupTransaction(userSolAddress) {
+  const { createTransferInstruction, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
+
+  return withFallback(async (connection) => {
+    const agentKeypair = getAgentKeypair();
+    const userPubkey   = new PublicKey(userSolAddress);
+    const userUsdcAta  = getUserUsdcAta(userSolAddress);
+    const agentUsdcAta = new PublicKey(process.env.AGENT_SOL_USDC_ATA);
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+
+    const tx = new Transaction({ recentBlockhash: blockhash, feePayer: agentKeypair.publicKey });
+    tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 200_000 }));
+    tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }));
+    tx.add(createTransferInstruction(
+      userUsdcAta,
+      agentUsdcAta,
+      userPubkey,
+      1_000_000, // $1 USDC (6 decimals)
+      [],
+      SPL_TOKEN
+    ));
+
+    const txBase64 = tx.serialize({ requireAllSignatures: false }).toString('base64');
+    return { txBase64, blockhash, lastValidBlockHeight };
+  });
+}
+
+// Receive a user-signed USDC→agent transfer, countersign as fee payer, submit,
+// then swap $0.50 of the received USDC for SOL so the agent can pay tx fees.
+async function submitSolGasTopup(userSignedTxBase64, blockhash, lastValidBlockHeight) {
+  const txBytes = Buffer.from(userSignedTxBase64, 'base64');
+  const tx = Transaction.from(txBytes);
+  const agentKeypair = getAgentKeypair();
+  tx.partialSign(agentKeypair);
+  const serialized = tx.serialize();
+
+  await withFallback(async (connection) => {
+    const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+    const id = await sendRaw();
+    console.log('Sol gas topup transfer submitted:', id);
+
+    const retryTimer = setInterval(() => sendRaw().catch(() => {}), 3000);
+    let conf;
+    try {
+      conf = await connection.confirmTransaction(
+        { signature: id, blockhash, lastValidBlockHeight },
+        'confirmed'
+      );
+    } finally {
+      clearInterval(retryTimer);
+    }
+    if (conf.value.err) throw new Error(`Gas topup transfer failed: ${JSON.stringify(conf.value.err)}`);
+    console.log('Gas topup transfer confirmed:', id);
+  });
+
+  await topUpGasFromUsdc();
+}
+
 module.exports = {
   getSolPortfolio,
   jupiterSwap,
@@ -690,5 +767,8 @@ module.exports = {
   submitJupiterBuyTransaction,
   ensureUserUsdcAta,
   getUserUsdcAta,
+  getUserSolUsdcBalance,
+  buildSolGasTopupTransaction,
+  submitSolGasTopup,
   XSTOCK_MINTS,
 };

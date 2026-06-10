@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getUserSolUsdcBalance, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -141,6 +141,41 @@ router.post('/submit-buy-swap', async (req, res) => {
   }
 });
 
+// Build an unsigned Solana tx to transfer $1 USDC from user's wallet → agent.
+// Solana-native path: no Sui bridge needed when user already has Solana USDC.
+router.post('/build-sol-gas-topup', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user.sol_address) return res.status(400).json({ error: 'No Solana address on account' });
+
+  try {
+    const result = await buildSolGasTopupTransaction(user.sol_address);
+    res.json(result);
+  } catch (e) {
+    console.error('build-sol-gas-topup error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Receive a user-signed USDC transfer to agent, countersign, submit, then topup SOL.
+router.post('/submit-sol-gas-topup', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { signedTx, blockhash, lastValidBlockHeight } = req.body;
+  if (!signedTx || !blockhash || !lastValidBlockHeight) {
+    return res.status(400).json({ error: 'Missing signedTx, blockhash, or lastValidBlockHeight' });
+  }
+
+  try {
+    await submitSolGasTopup(signedTx, blockhash, lastValidBlockHeight);
+    res.json({ ok: true, message: 'Gas funded from Solana USDC. Proceeding with trade.' });
+  } catch (e) {
+    console.error('submit-sol-gas-topup error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Receive a Sui→Solana USDC bridge (by suiTxHash) and convert $0.50 to SOL for gas.
 // Called by the frontend after the user approves a $1 gas-topup bridge from Sui.
 router.post('/bridge-for-gas', async (req, res) => {
@@ -227,11 +262,13 @@ router.post('/execute', async (req, res) => {
           // Gas check: ensure agent has SOL before swap. Auto-tops up from USDC if possible.
           const gasStatus = await ensureGas();
           if (!gasStatus.ok) {
+            const userSolUsdcBalance = await getUserSolUsdcBalance(user.sol_address);
             return res.status(402).json({
               error: 'GAS_INSUFFICIENT',
               needsBridge: true,
               solBalance: gasStatus.solBalance,
               usdcBalance: gasStatus.usdcBalance,
+              userSolUsdcBalance,
             });
           }
 
@@ -297,12 +334,14 @@ router.post('/execute', async (req, res) => {
           console.log('Step 3: Checking gas...');
           const gasStatus = await ensureGas();
           if (!gasStatus.ok) {
+            const userSolUsdcBalance = await getUserSolUsdcBalance(user.sol_address);
             return res.status(402).json({
               error: 'GAS_INSUFFICIENT',
               needsBridge: true,
               suiTxHash,
               solBalance: gasStatus.solBalance,
               usdcBalance: gasStatus.usdcBalance,
+              userSolUsdcBalance,
             });
           }
 
@@ -416,11 +455,13 @@ router.post('/build-burn', async (req, res) => {
     // Pre-check: ensure agent has enough SOL to complete the Solana side before the user burns.
     const gasStatus = await ensureGas();
     if (!gasStatus.ok) {
+      const userSolUsdcBalance = await getUserSolUsdcBalance(user.sol_address);
       return res.status(402).json({
         error: 'GAS_INSUFFICIENT',
         needsBridge: true,
         solBalance: gasStatus.solBalance,
         usdcBalance: gasStatus.usdcBalance,
+        userSolUsdcBalance,
       });
     }
 
