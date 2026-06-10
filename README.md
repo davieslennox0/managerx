@@ -2,11 +2,13 @@
 
 > Sui · Solana · CCTP · Jupiter · Claude AI · Dynamic
 
+Built for **Sui Overflow 2026**
+
 ---
 
 ## Overview
 
-ManagerX is a conversational portfolio agent that lets users buy and sell tokenized US stocks using USDC. Users interact via natural language — the AI executes trades, bridges funds cross-chain, and manages the full lifecycle without the user touching raw transactions.
+ManagerX is a conversational portfolio agent that lets users buy and sell tokenized US stocks using USDC on Sui. Users interact via natural language — the AI executes trades, bridges funds cross-chain via CCTP, and manages the full lifecycle without the user touching raw transactions.
 
 **Supported assets:** 74 xStocks by Backed Finance (Kraken) — TSLAx, NVDAx, AAPLx, SPYx, QQQx, COINx, MSTRx, CRCLx, and 66+ more. All 1:1 backed by real shares, tradeable 24/7.
 
@@ -48,8 +50,8 @@ Selling reverses the flow: xStock → agent → Jupiter swap → CCTP → USDC o
 | Backend | Node.js, Express, SQLite (better-sqlite3) |
 | AI | Claude claude-sonnet-4-6 with tool use |
 | Auth | Dynamic (Google OAuth + embedded wallets) |
-| Sui chain | Sui Mainnet |
-| Solana chain | Solana Mainnet |
+| Primary chain | Sui Mainnet |
+| Execution chain | Solana Mainnet (xStock liquidity via Jupiter) |
 | Bridge | Circle CCTP V1 (Sui ↔ Solana) |
 | Trade execution | Jupiter aggregator |
 | Gas sponsorship | Agent-sponsored Sui transactions (user needs no SUI) |
@@ -79,21 +81,18 @@ Required env vars:
 ANTHROPIC_API_KEY=
 JWT_SECRET=
 
-# Dynamic
-DYNAMIC_ENV_ID=
-
-# Solana
-SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...
-AGENT_SOL_PRIVATE_KEY=        # base58 — agent keypair
-AGENT_SOL_ADDRESS=            # agent Solana pubkey
-AGENT_SOL_USDC_ATA=           # agent's USDC associated token account
-
 # Sui
 SUI_RPC_URL=https://fullnode.mainnet.sui.io
 SUI_AGENT_PRIVATE_KEY=        # suiprivkey1... format
 SUI_PACKAGE_ID=
 SUI_MANAGER_STATE=
 SUI_ADMIN_CAP=
+
+# Solana (execution layer — Jupiter + CCTP)
+SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...
+AGENT_SOL_PRIVATE_KEY=        # base58 — agent keypair
+AGENT_SOL_ADDRESS=            # agent Solana pubkey
+AGENT_SOL_USDC_ATA=           # agent's USDC associated token account
 
 # Walrus receipts
 RECEIPTS_PACKAGE_ID=
@@ -191,4 +190,4 @@ Claude uses a structured `execute_action` tool instead of generating JSON-in-mar
 
 ---
 
-Built June 2026
+Built for **Sui Overflow 2026**
