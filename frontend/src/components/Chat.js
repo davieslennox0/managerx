@@ -49,7 +49,7 @@ function ConfirmModal({ action, onConfirm, onCancel }) {
         <div style={{ fontSize: 10, color: '#C9A84C', letterSpacing: '0.2em', marginBottom: 16 }}>{isBridge ? 'CONFIRM BRIDGE' : 'CONFIRM TRADE'}</div>
         <div style={{ fontSize: 13, color: '#E8DCC8', marginBottom: 8 }}>
           {isBridge
-            ? <><strong>BRIDGE</strong> ${action.amount} USDC Sui → Solana</>
+            ? <><strong>BRIDGE</strong> ${action.amount} USDC {action.direction === 'solana_to_sui' ? 'Solana → Sui' : 'Sui → Solana'}</>
             : <><strong>{action.action?.toUpperCase()}</strong> {action.symbol}</>}
         </div>
         <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
@@ -109,6 +109,53 @@ export default function Chat({ user, chain }) {
       let suiTxHash = null;
       let solTxHash = null;
       let execUserSuiAddress = null;
+
+      if (chain === 'sui' && action.action === 'bridge' && action.direction === 'solana_to_sui') {
+        // ── BRIDGE Solana→Sui: user signs Solana USDC transfer to agent, agent CCTP-bridges to Sui ──
+        const solWallet = userWallets?.find(w => isSolanaWallet(w));
+        if (!solWallet) throw new Error('Solana wallet not connected. Please connect your Solana wallet.');
+        const suiAddress = user.suiAddress;
+        if (!suiAddress) throw new Error('Sui address not found on your account.');
+
+        const rawAmount = Math.round(action.amount * 1e6);
+
+        const { data: buildData } = await axios.post('/api/trade/build-sol-to-sui-bridge', {
+          rawAmount,
+        }, { headers: { Authorization: `Bearer ${token}` } });
+
+        const txBytes = Uint8Array.from(atob(buildData.txBase64), c => c.charCodeAt(0));
+        const solTxForBridge = SolTransaction.from(txBytes);
+
+        let userSignedTxBase64;
+        const solConnector = solWallet._connector;
+        if (solConnector && typeof solConnector.internalSignTransaction === 'function') {
+          if (typeof solConnector.setActiveAccountAddress === 'function') {
+            solConnector.setActiveAccountAddress(solWallet.address);
+          }
+          const signed = await solConnector.internalSignTransaction(solTxForBridge);
+          userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
+        } else {
+          const signer = await solWallet.getSigner();
+          const signed = await signer.signTransaction(solTxForBridge);
+          userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
+        }
+
+        setMessages(prev => [...prev, { role: 'assistant', content: `🔄 Signed. Transferring $${action.amount} USDC Solana → Sui (30–60s)...` }]);
+
+        const { data: bridgeResult } = await axios.post('/api/trade/submit-sol-to-sui-bridge', {
+          signedTx: userSignedTxBase64,
+          blockhash: buildData.blockhash,
+          lastValidBlockHeight: buildData.lastValidBlockHeight,
+          rawAmount,
+          userSuiAddress: suiAddress,
+        }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
+
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `✅ $${action.amount} USDC bridged to your Sui wallet!\n\n**Tx:** ${bridgeResult.suiMintTxHash?.slice(0, 10)}...`,
+        }]);
+        return;
+      }
 
       if (chain === 'sui') {
         if (action.action === 'sell') {

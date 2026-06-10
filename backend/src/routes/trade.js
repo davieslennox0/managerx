@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getUserSolUsdcBalance, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -172,6 +172,47 @@ router.post('/submit-sol-gas-topup', async (req, res) => {
     res.json({ ok: true, message: 'Gas funded from Solana USDC. Proceeding with trade.' });
   } catch (e) {
     console.error('submit-sol-gas-topup error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Build an unsigned Solana tx to transfer arbitrary USDC from user's wallet → agent,
+// in preparation for a Solana→Sui bridge.
+router.post('/build-sol-to-sui-bridge', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user.sol_address) return res.status(400).json({ error: 'No Solana address on account' });
+
+  const { rawAmount } = req.body;
+  if (!rawAmount || rawAmount <= 0) return res.status(400).json({ error: 'Missing or invalid rawAmount' });
+
+  try {
+    const result = await buildSolUsdcTransferToAgent(user.sol_address, rawAmount);
+    res.json(result);
+  } catch (e) {
+    console.error('build-sol-to-sui-bridge error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Submit a user-signed USDC transfer (user→agent), then CCTP-bridge the USDC to Sui.
+router.post('/submit-sol-to-sui-bridge', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { signedTx, blockhash, lastValidBlockHeight, rawAmount, userSuiAddress } = req.body;
+  if (!signedTx || !blockhash || !lastValidBlockHeight || !rawAmount || !userSuiAddress) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const { countersignAndSubmitSellTransfer: submitTx } = require('../lib/solana');
+    await submitTx(signedTx, blockhash, lastValidBlockHeight);
+    console.log('User USDC arrived in agent wallet — bridging to Sui...');
+    const bridge = await bridgeUsdcSolanaToSui(rawAmount, userSuiAddress);
+    res.json({ ok: true, suiMintTxHash: bridge.suiMintTxHash, burnTxHash: bridge.burnTxHash });
+  } catch (e) {
+    console.error('submit-sol-to-sui-bridge error:', e);
     res.status(500).json({ error: e.message });
   }
 });

@@ -50,7 +50,12 @@ const EXECUTE_TOOL = {
       action: {
         type: 'string',
         enum: ['buy', 'sell', 'bridge'],
-        description: 'buy = purchase an xStock with USDC; sell = sell an xStock for USDC returned to Sui; bridge = move USDC from Sui to Solana without trading',
+        description: 'buy = purchase an xStock with USDC; sell = sell an xStock for USDC returned to Sui; bridge = move USDC between Sui and Solana without trading (use direction field to specify which way)',
+      },
+      direction: {
+        type: 'string',
+        enum: ['sui_to_solana', 'solana_to_sui'],
+        description: 'Required for bridge. sui_to_solana = burn USDC on Sui, receive on Solana. solana_to_sui = transfer USDC from Solana wallet to Sui wallet. Choose based on where the user says the funds are coming FROM.',
       },
       symbol: {
         type: 'string',

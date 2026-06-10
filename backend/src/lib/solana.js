@@ -690,9 +690,9 @@ async function getUserSolUsdcBalance(solAddress) {
   } catch { return 0; }
 }
 
-// Build an unsigned tx to transfer $1 USDC from user's ATA → agent's USDC ATA.
-// Agent is fee payer so the user needs no SOL. After signing, call submitSolGasTopup.
-async function buildSolGasTopupTransaction(userSolAddress) {
+// Build an unsigned Solana tx to transfer USDC from user's ATA → agent's USDC ATA.
+// Agent is fee payer so the user needs no SOL.
+async function buildSolUsdcTransferToAgent(userSolAddress, rawUsdcAmount) {
   const { createTransferInstruction, TOKEN_PROGRAM_ID: SPL_TOKEN } = require('@solana/spl-token');
 
   return withFallback(async (connection) => {
@@ -710,7 +710,7 @@ async function buildSolGasTopupTransaction(userSolAddress) {
       userUsdcAta,
       agentUsdcAta,
       userPubkey,
-      1_000_000, // $1 USDC (6 decimals)
+      rawUsdcAmount,
       [],
       SPL_TOKEN
     ));
@@ -718,6 +718,11 @@ async function buildSolGasTopupTransaction(userSolAddress) {
     const txBase64 = tx.serialize({ requireAllSignatures: false }).toString('base64');
     return { txBase64, blockhash, lastValidBlockHeight };
   });
+}
+
+// $1 USDC transfer to agent — used for gas top-up.
+async function buildSolGasTopupTransaction(userSolAddress) {
+  return buildSolUsdcTransferToAgent(userSolAddress, 1_000_000);
 }
 
 // Receive a user-signed USDC→agent transfer, countersign as fee payer, submit,
@@ -768,6 +773,7 @@ module.exports = {
   ensureUserUsdcAta,
   getUserUsdcAta,
   getUserSolUsdcBalance,
+  buildSolUsdcTransferToAgent,
   buildSolGasTopupTransaction,
   submitSolGasTopup,
   XSTOCK_MINTS,
