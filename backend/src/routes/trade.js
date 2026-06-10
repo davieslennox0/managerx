@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, buildJupiterSellTransaction, submitJupiterSellTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -67,6 +67,94 @@ router.post('/build-sell-transfer', async (req, res) => {
     res.json({ transaction: txBase64, blockhash, lastValidBlockHeight, mintAddress, rawAmount, shares });
   } catch (e) {
     console.error('Build sell transfer error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Build a Jupiter sell tx (xStock→USDC) for the user to sign.
+// xStock goes directly from user wallet → Jupiter pool.
+// USDC output lands in agent ATA for bridging to Sui.
+// Agent is fee payer only — never takes custody of xStock.
+router.post('/build-sell-swap', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user.sol_address) return res.status(400).json({ error: 'No Solana address on account' });
+
+  const { symbol, amount, currency } = req.body;
+  if (!symbol || !amount) return res.status(400).json({ error: 'Missing params' });
+
+  try {
+    const sym = symbol.replace(/x$/i, '').toUpperCase();
+    const priceData = await getPrice(sym);
+    const price = parseFloat(priceData?.price || 0);
+    if (!price) return res.status(400).json({ error: `No price data for ${symbol}` });
+
+    const shares = currency === 'usd' ? amount / price : amount;
+    const canonical = sym + 'x';
+    const mintAddress = XSTOCK_MINTS[canonical];
+    if (!mintAddress) return res.status(400).json({ error: `Unknown xStock: ${symbol}` });
+
+    const result = await buildJupiterSellTransaction(user.sol_address, mintAddress, shares);
+    res.json({ ...result, price, symbol: canonical });
+  } catch (e) {
+    console.error('build-sell-swap error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Receive user-signed Jupiter sell tx, confirm, then bridge USDC to user's Sui wallet.
+router.post('/submit-sell-swap', async (req, res) => {
+  const user = authUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { signedTx, blockhash, lastValidBlockHeight, rawUsdcOutput, userSuiAddress, symbol, shares, price } = req.body;
+  if (!signedTx || !blockhash || !lastValidBlockHeight || !rawUsdcOutput || !userSuiAddress) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    // Step 1: Confirm the Jupiter sell swap
+    const swapTxHash = await submitJupiterSellTransaction(signedTx, blockhash, lastValidBlockHeight);
+    console.log('Sell swap confirmed:', swapTxHash, '— USDC in agent ATA, bridging to Sui…');
+
+    // Step 2: Deduct platform fee, bridge the rest to user's Sui wallet
+    const feeBps = parseInt(process.env.PLATFORM_FEE_BPS || '0');
+    const feeRaw   = Math.round(rawUsdcOutput * feeBps / 10000);
+    const bridgeRaw = Math.max(rawUsdcOutput - feeRaw, 0);
+    if (bridgeRaw <= 0) throw new Error('Sell proceeds too small to bridge');
+
+    const bridge = await bridgeUsdcSolanaToSui(bridgeRaw, userSuiAddress);
+    console.log('Bridge complete:', bridge.suiMintTxHash);
+
+    // Step 3: Record position update in DB
+    if (symbol && shares && price) {
+      const total = shares * price;
+      const holding = db.prepare('SELECT * FROM positions WHERE user_id = ? AND chain = ? AND symbol = ?')
+        .get(user.id, 'sui', symbol);
+      if (holding) {
+        const newShares = holding.shares - shares;
+        if (newShares < 0.0001) {
+          db.prepare('DELETE FROM positions WHERE user_id = ? AND chain = ? AND symbol = ?')
+            .run(user.id, 'sui', symbol);
+        } else {
+          db.prepare('UPDATE positions SET shares = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND chain = ? AND symbol = ?')
+            .run(newShares, user.id, 'sui', symbol);
+        }
+      }
+      db.prepare('INSERT INTO transactions (id, user_id, chain, type, symbol, shares, price, total, tx_hash, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(uuid(), user.id, 'sui', 'sell', symbol, shares, price, total, swapTxHash, 'success');
+      storeTradeReceipt({ userId: user.id, chain: 'sui', type: 'sell', symbol, shares, price, total, txHash: swapTxHash, timestamp: new Date().toISOString() }).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      swapTxHash,
+      suiMintTxHash: bridge.suiMintTxHash,
+      burnTxHash: bridge.burnTxHash,
+      usdcBridged: (bridgeRaw / 1e6).toFixed(6),
+    });
+  } catch (e) {
+    console.error('submit-sell-swap error:', e);
     res.status(500).json({ error: e.message });
   }
 });

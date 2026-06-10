@@ -159,52 +159,57 @@ export default function Chat({ user, chain }) {
 
       if (chain === 'sui') {
         if (action.action === 'sell') {
-          // ── SELL: transfer xStock Solana→agent, backend swaps+bridges USDC→Sui ──
+          // ── SELL (non-custodial): user signs Jupiter swap directly ──
+          // xStock goes: user wallet → Jupiter pool → USDC → agent ATA → CCTP bridge → Sui
+          // Agent is fee payer only. xStock never enters agent wallet.
           const solWallet = userWallets?.find(w => isSolanaWallet(w));
           if (!solWallet) throw new Error('Solana wallet not connected. Please connect your Solana wallet.');
-
           const suiAddress = user.suiAddress;
           if (!suiAddress) throw new Error('Sui address not found on your account.');
 
-          // Step 1: Backend builds the unsigned Solana SPL transfer tx
-          const { data: buildData } = await axios.post('/api/trade/build-sell-transfer', {
+          // Step 1: Backend builds Jupiter sell tx (agent pre-signed as fee payer)
+          const { data: buildData } = await axios.post('/api/trade/build-sell-swap', {
             symbol: action.symbol,
             amount: action.amount,
             currency: action.currency || 'usd',
           }, { headers: { Authorization: `Bearer ${token}` } });
 
-          // Step 2: User SIGNS ONLY — backend countersigns as fee payer + submits.
-          // This avoids the "invalid signature" error caused by wallets refreshing
-          // the blockhash after the backend pre-signs.
-          const connection = await solWallet.getConnection();
-          const txBytes = Uint8Array.from(atob(buildData.transaction), c => c.charCodeAt(0));
-          const solTx = SolTransaction.from(txBytes);
+          setMessages(prev => [...prev, { role: 'assistant', content: `🔄 Sign to swap ${action.symbol} → USDC and bridge to Sui...` }]);
 
-          let userSignedTxBase64;
-          const solConnector = solWallet._connector;
-          if (solConnector && typeof solConnector.internalSignTransaction === 'function') {
-            if (typeof solConnector.setActiveAccountAddress === 'function') {
-              solConnector.setActiveAccountAddress(solWallet.address);
-            }
-            const signed = await solConnector.internalSignTransaction(solTx);
-            userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
-          } else {
+          // Step 2: User signs the VersionedTransaction (authority on their xStock ATA)
+          const txBytes = Uint8Array.from(atob(buildData.txBase64), c => c.charCodeAt(0));
+          const { VersionedTransaction: VT } = await import('@solana/web3.js');
+          const vtx = VT.deserialize(txBytes);
+
+          let signedTxBase64;
+          try {
             const signer = await solWallet.getSigner();
-            const signed = await signer.signTransaction(solTx);
-            userSignedTxBase64 = btoa(String.fromCharCode(...signed.serialize({ requireAllSignatures: false })));
+            const signed = await signer.signTransaction(vtx);
+            signedTxBase64 = btoa(String.fromCharCode(...signed.serialize()));
+          } catch {
+            const solConnector = solWallet._connector;
+            if (solConnector?.setActiveAccountAddress) solConnector.setActiveAccountAddress(solWallet.address);
+            const signed = await solConnector.internalSignTransaction(vtx);
+            signedTxBase64 = btoa(String.fromCharCode(...signed.serialize()));
           }
 
-          // Step 3: Backend countersigns as fee payer + submits to Solana (up to 120s)
-          const { data: submitData } = await axios.post('/api/trade/submit-sell-transfer', {
-            signedTx: userSignedTxBase64,
+          // Step 3: Backend confirms swap + bridges USDC to Sui (one call, ~60s)
+          const { data: sellResult } = await axios.post('/api/trade/submit-sell-swap', {
+            signedTx: signedTxBase64,
             blockhash: buildData.blockhash,
             lastValidBlockHeight: buildData.lastValidBlockHeight,
-          }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
-          solTxHash = submitData.txHash;
-          // Backend already confirmed — no need to re-confirm here
-          console.log('xStock transfer to agent confirmed:', solTxHash);
+            rawUsdcOutput: buildData.rawUsdcOutput,
+            userSuiAddress: suiAddress,
+            symbol: buildData.symbol,
+            shares: buildData.shares,
+            price: buildData.price,
+          }, { headers: { Authorization: `Bearer ${token}` }, timeout: 180000 });
 
-          execUserSuiAddress = suiAddress;
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `✅ Sold ${action.symbol}! $${sellResult.usdcBridged} USDC bridged to your Sui wallet.\n\n**Swap:** ${sellResult.swapTxHash?.slice(0,10)}...\n**Sui:** ${sellResult.suiMintTxHash?.slice(0,10)}...`,
+          }]);
+          return;
 
         } else {
           // ── BUY: user burns USDC on Sui → USDC minted to user's Solana ATA ──

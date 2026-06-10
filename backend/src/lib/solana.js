@@ -713,6 +713,129 @@ async function buildJupiterBuyTransaction(userSolAddress, symbol, grossUsdcRaw, 
   });
 }
 
+// Build a Jupiter sell transaction where:
+//  - User's xStock ATA is the input (user is authority — xStock NEVER enters agent wallet)
+//  - USDC output goes directly to agent's USDC ATA via destinationTokenAccount
+//  - Agent is fee payer only (pre-signed); user adds their authority signature
+//
+// Returns { txBase64, blockhash, lastValidBlockHeight, rawUsdcOutput, shares }
+async function buildJupiterSellTransaction(userSolAddress, mintAddress, shares) {
+  const { getMint, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+
+  const agentKeypair = getAgentKeypair();
+  const userPubkey   = new PublicKey(userSolAddress);
+  const agentUsdcAta = process.env.AGENT_SOL_USDC_ATA;
+
+  return withFallback(async (connection) => {
+    // Resolve actual on-chain decimals
+    const mint = new PublicKey(mintAddress);
+    const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    const decimals  = mintInfo.decimals;
+    const rawAmount = BigInt(Math.round(shares * 10 ** decimals));
+
+    // Verify user owns enough xStock
+    const userAccounts = await connection.getParsedTokenAccountsByOwner(userPubkey, { mint });
+    if (!userAccounts.value.length) throw new Error(`No ${mintAddress.slice(0,8)}… token account found in your wallet`);
+    const best = userAccounts.value.reduce((a, b) =>
+      BigInt(a.account.data.parsed.info.tokenAmount.amount) >=
+      BigInt(b.account.data.parsed.info.tokenAmount.amount) ? a : b
+    );
+    const userBalance = BigInt(best.account.data.parsed.info.tokenAmount.amount);
+    if (userBalance < rawAmount) throw new Error(
+      `Insufficient holdings: have ${Number(userBalance)/10**decimals} (need ${shares})`
+    );
+
+    // Jupiter v6 quote: xStock → USDC
+    const quoteRes = await axios.get('https://quote-api.jup.ag/v6/quote', {
+      params: { inputMint: mintAddress, outputMint: USDC_SOL, amount: rawAmount.toString(), slippageBps: 50 },
+    });
+    const quote = quoteRes.data;
+    const rawUsdcOutput = Number(quote.outAmount);
+
+    // Jupiter v6 swap-instructions: user is authority on xStock, USDC output → agent ATA
+    const instrRes = await axios.post('https://quote-api.jup.ag/v6/swap-instructions', {
+      quoteResponse: quote,
+      userPublicKey: userSolAddress,
+      destinationTokenAccount: agentUsdcAta,
+      wrapAndUnwrapSol: false,
+      prioritizationFeeLamports: 'auto',
+      dynamicComputeUnitLimit: true,
+    });
+
+    const {
+      computeBudgetInstructions = [],
+      setupInstructions = [],
+      swapInstruction,
+      cleanupInstruction,
+      addressLookupTableAddresses = [],
+    } = instrRes.data;
+
+    function deserializeIx(ix) {
+      return {
+        programId: new PublicKey(ix.programId),
+        keys: ix.accounts.map(a => ({
+          pubkey: new PublicKey(a.pubkey),
+          isSigner: a.isSigner,
+          isWritable: a.isWritable,
+        })),
+        data: Buffer.from(ix.data, 'base64'),
+      };
+    }
+
+    const allIxs = [
+      ...computeBudgetInstructions.map(deserializeIx),
+      ...setupInstructions.map(deserializeIx),
+      deserializeIx(swapInstruction),
+      ...(cleanupInstruction ? [deserializeIx(cleanupInstruction)] : []),
+    ];
+
+    const altAccounts = (await Promise.all(
+      addressLookupTableAddresses.map(addr =>
+        connection.getAddressLookupTable(new PublicKey(addr)).then(r => r.value)
+      )
+    )).filter(Boolean);
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+    // Agent is fee payer only — does NOT take custody of xStock
+    const message = new TransactionMessage({
+      payerKey: agentKeypair.publicKey,
+      recentBlockhash: blockhash,
+      instructions: allIxs,
+    }).compileToV0Message(altAccounts);
+
+    const tx = new VersionedTransaction(message);
+    tx.sign([agentKeypair]);
+
+    return {
+      txBase64: Buffer.from(tx.serialize()).toString('base64'),
+      blockhash,
+      lastValidBlockHeight,
+      rawUsdcOutput,
+      shares,
+    };
+  });
+}
+
+// Submit a Jupiter sell tx (already signed by user). Agent pre-signed at build time.
+async function submitJupiterSellTransaction(userSignedTxBase64, blockhash, lastValidBlockHeight) {
+  const txBytes = Buffer.from(userSignedTxBase64, 'base64');
+  const tx = VersionedTransaction.deserialize(txBytes);
+  const serialized = tx.serialize();
+
+  return withFallback(async (connection) => {
+    const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+    const id = await sendRaw();
+    console.log('Jupiter sell (user) submitted:', id, '— polling…');
+    return pollSignatureStatus(connection, id, {
+      label: 'Jupiter sell',
+      blockhash,
+      lastValidBlockHeight,
+      resendFn: sendRaw,
+    });
+  });
+}
+
 // Submit a Jupiter buy tx that the user has signed. Agent already signed at build time.
 // Keeps rebroadcasting until confirmed or blockhash expires.
 async function submitJupiterBuyTransaction(userSignedTxBase64, blockhash, lastValidBlockHeight) {
@@ -855,5 +978,7 @@ module.exports = {
   submitSolGasTopup,
   countersignAndSubmit,
   pollSignatureStatus,
+  buildJupiterSellTransaction,
+  submitJupiterSellTransaction,
   XSTOCK_MINTS,
 };
