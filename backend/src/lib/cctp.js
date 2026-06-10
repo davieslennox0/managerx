@@ -4,7 +4,7 @@ const { receiveMessageOnSolana } = require('./cctp_solana_mint');
 const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
 const { Transaction } = require('@mysten/sui/transactions');
-const { pollSignatureStatus } = require('./solana');
+const { pollSignatureStatus, ensureUserUsdcAta, getUserUsdcAta } = require('./solana');
 
 // Sui CCTP V1 Mainnet addresses
 const SUI_CCTP = {
@@ -69,28 +69,36 @@ async function pollAttestation(messageHash, maxWait = 300_000) {
   throw new Error('Attestation timed out after ' + maxWait / 1000 + 's');
 }
 
-// Bridge USDC from user's Sui wallet to Solana destination
-async function bridgeUsdcSuiToSolana(userSuiAddress, amountUsdc, solanaDestination) {
+// Bridge USDC from agent's Sui wallet to user's Solana wallet.
+// Agent signs (only agent can spend its own Sui USDC).
+// solanaWalletAddress is the user's Solana wallet address (not ATA — derived internally).
+async function bridgeUsdcSuiToSolana(amountUsdc, solanaWalletAddress) {
   const client = getSuiClient();
   const keypair = getAgentKeypair();
   const amountMist = BigInt(Math.round(amountUsdc * 1e6));
+  const agentSuiAddress = keypair.getPublicKey().toSuiAddress();
 
-  console.log(`Bridging ${amountUsdc} USDC: Sui → Solana(${solanaDestination})`);
+  // Derive destination ATA from wallet address (sync, no network call needed)
+  const userUsdcAta = getUserUsdcAta(solanaWalletAddress);
+  const solanaDestination = userUsdcAta.toBase58();
 
-  // Get user's USDC coins
+  console.log(`Bridging ${amountUsdc} USDC: Sui(agent) → Solana(${solanaWalletAddress}) ATA(${solanaDestination})`);
+
+  // Get agent's USDC coins on Sui
   const coins = await client.getCoins({
-    owner: userSuiAddress,
+    owner: agentSuiAddress,
     coinType: USDC_SUI_TYPE,
   });
 
-  if (!coins.data.length) throw new Error('No USDC found in Sui wallet');
+  if (!coins.data.length) throw new Error('No USDC found in agent Sui wallet');
 
   // Find coin with enough balance
   const coin = coins.data.find(c => BigInt(c.balance) >= amountMist);
-  if (!coin) throw new Error(`Insufficient USDC. Have: ${coins.data.reduce((a, c) => a + BigInt(c.balance), 0n) / 1000000n} USDC`);
+  if (!coin) throw new Error(`Insufficient USDC in agent Sui wallet. Have: ${coins.data.reduce((a, c) => a + BigInt(c.balance), 0n) / 1000000n} USDC`);
 
-  // Convert Solana destination to bytes32
-  const mintRecipientBytes = solanaAddressToBytes32(solanaDestination);
+  // Convert Solana destination ATA to 0x-prefixed hex for tx.pure.address
+  const { PublicKey } = require('@solana/web3.js');
+  const mintRecipientHex = '0x' + Buffer.from(new PublicKey(solanaDestination).toBytes()).toString('hex');
 
   const tx = new Transaction();
 
@@ -110,7 +118,7 @@ async function bridgeUsdcSuiToSolana(userSuiAddress, amountUsdc, solanaDestinati
     arguments: [
       coinToUse,
       tx.pure.u32(SOLANA_CCTP.domain),
-      tx.pure.vector('u8', mintRecipientBytes),
+      tx.pure.address(mintRecipientHex),
       tx.object(SUI_CCTP.tokenMessengerMinterState),
       tx.object(SUI_CCTP.messageTransmitterState),
       tx.object(SUI_CCTP.denyList),
@@ -141,9 +149,10 @@ async function bridgeUsdcSuiToSolana(userSuiAddress, amountUsdc, solanaDestinati
   // Wait for Circle attestation
   const attestation = await pollAttestation(messageHash);
 
-  // receiveMessageOnSolana needs the full 248-byte message hex, not the hash.
+  // Ensure the destination USDC ATA is initialized before minting.
+  await ensureUserUsdcAta(solanaWalletAddress);
   console.log('Step 3: Minting USDC on Solana...');
-  const mintResult = await receiveMessageOnSolana(messageHex, attestation);
+  const mintResult = await receiveMessageOnSolana(messageHex, attestation, solanaDestination);
   console.log('USDC minted:', mintResult.txHash);
 
   return {
