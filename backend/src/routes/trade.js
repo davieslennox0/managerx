@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -657,8 +657,13 @@ router.post('/bridge-to-solana', async (req, res) => {
       tx.add(ix);
       tx.sign(agentKeypair);
 
-      const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-      await connection.confirmTransaction(sig, 'confirmed');
+      const serialized = tx.serialize();
+      const sig = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+      console.log('bridge-to-solana: transfer submitted:', sig);
+      await pollSignatureStatus(connection, sig, {
+        label: 'Bridge→Solana USDC transfer',
+        resendFn: () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 }),
+      });
       console.log('bridge-to-solana: transfer complete', sig);
       return sig;
     });

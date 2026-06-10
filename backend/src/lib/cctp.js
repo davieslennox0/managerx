@@ -4,6 +4,7 @@ const { receiveMessageOnSolana } = require('./cctp_solana_mint');
 const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
 const { Ed25519Keypair } = require('@mysten/sui/keypairs/ed25519');
 const { Transaction } = require('@mysten/sui/transactions');
+const { pollSignatureStatus } = require('./solana');
 
 // Sui CCTP V1 Mainnet addresses
 const SUI_CCTP = {
@@ -208,20 +209,15 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
         const swapTx = VersionedTransaction.deserialize(Buffer.from(swapRes.data.swapTransaction, 'base64'));
         swapTx.sign([agentKeypair]);
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-        const sig = await connection.sendRawTransaction(swapTx.serialize(), { skipPreflight: true, maxRetries: 3 });
-        try {
-          const conf = await connection.confirmTransaction(
-            { signature: sig, blockhash, lastValidBlockHeight },
-            'confirmed'
-          );
-          if (conf.value.err) throw new Error(`Swap failed on-chain: ${JSON.stringify(conf.value.err)}`);
-        } catch (confErr) {
-          // If confirmation timed out, check whether the balance actually increased —
-          // the tx may have landed despite the timeout.
-          const newBalance = await connection.getBalance(agentKeypair.publicKey);
-          if (newBalance <= agentSolBalance) throw confErr;
-          console.log(`SOL topup confirmation timed out but balance increased — continuing (${sig})`);
-        }
+        const swapSerialized = swapTx.serialize();
+        const sig = await connection.sendRawTransaction(swapSerialized, { skipPreflight: true, maxRetries: 0 });
+        console.log('CCTP SOL topup submitted:', sig);
+        await pollSignatureStatus(connection, sig, {
+          label: 'CCTP SOL topup',
+          blockhash,
+          lastValidBlockHeight,
+          resendFn: () => connection.sendRawTransaction(swapSerialized, { skipPreflight: true, maxRetries: 0 }),
+        });
         console.log(`SOL topup complete: ${sig}`);
       } catch (e) {
         throw new Error(
@@ -285,7 +281,7 @@ async function depositForBurnOnSolana(rawUsdcAmount, userSuiAddress) {
       .rpc();
 
     console.log('depositForBurn tx:', txSig);
-    await connection.confirmTransaction(txSig, 'confirmed');
+    await pollSignatureStatus(connection, txSig, { label: 'CCTP depositForBurn' });
 
     // Read CCTP message from event data account: disc(8)+sender(32)+vec_len(4)+msg(248) → offset 44
     const accountInfo = await connection.getAccountInfo(messageSentEventDataKeypair.publicKey);

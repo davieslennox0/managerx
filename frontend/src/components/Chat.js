@@ -199,7 +199,7 @@ export default function Chat({ user, chain }) {
             signedTx: userSignedTxBase64,
             blockhash: buildData.blockhash,
             lastValidBlockHeight: buildData.lastValidBlockHeight,
-          }, { headers: { Authorization: `Bearer ${token}` } });
+          }, { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 });
           solTxHash = submitData.txHash;
           // Backend already confirmed — no need to re-confirm here
           console.log('xStock transfer to agent confirmed:', solTxHash);

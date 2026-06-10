@@ -6,6 +6,58 @@ const { withFallback } = require('./solana_connection');
 const USDC_SOL = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
 
+// Poll getSignatureStatus via HTTP instead of WebSocket confirmTransaction.
+// Public RPCs frequently drop WebSocket connections (causing "not confirmed in 30s" errors).
+// This approach re-sends every 2s and polls status every 2s for up to 90s.
+async function pollSignatureStatus(connection, signature, opts = {}) {
+  const { blockhash, lastValidBlockHeight, label = 'tx', resendFn } = opts;
+  const timeoutMs = 90_000;
+  const deadline = Date.now() + timeoutMs;
+  const resendInterval = resendFn
+    ? setInterval(() => resendFn().catch(() => {}), 2000)
+    : null;
+  try {
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2000));
+
+      const { value } = await connection.getSignatureStatus(signature, { searchTransactionHistory: false });
+      if (value !== null) {
+        if (value.err) {
+          const txData = await connection.getTransaction(signature, {
+            commitment: 'confirmed',
+            maxSupportedTransactionVersion: 0,
+          }).catch(() => null);
+          const logs = txData?.meta?.logMessages?.join('\n') || '';
+          throw new Error(`${label} failed on-chain (${signature.slice(0,8)}…): ${JSON.stringify(value.err)}\nLogs:\n${logs}`);
+        }
+        if (value.confirmationStatus === 'confirmed' || value.confirmationStatus === 'finalized') {
+          return signature;
+        }
+      }
+
+      if (lastValidBlockHeight !== undefined) {
+        const blockHeight = await connection.getBlockHeight('confirmed');
+        if (blockHeight > lastValidBlockHeight) {
+          // One last check including history before giving up
+          const { value: final } = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+          if (final && !final.err && (final.confirmationStatus === 'confirmed' || final.confirmationStatus === 'finalized')) {
+            return signature;
+          }
+          throw new Error(`${label} blockhash expired — tx not confirmed (${signature.slice(0,8)}…). Retry the transaction.`);
+        }
+      }
+    }
+    // Final check before giving up
+    const { value: final } = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+    if (final && !final.err && (final.confirmationStatus === 'confirmed' || final.confirmationStatus === 'finalized')) {
+      return signature;
+    }
+    throw new Error(`${label} not confirmed in ${timeoutMs/1000}s (${signature}). Check Solana Explorer.`);
+  } finally {
+    if (resendInterval) clearInterval(resendInterval);
+  }
+}
+
 // Gas management: keep 0.005 SOL on hand — enough to cover CCTP depositForBurn
 // rent (~0.003 SOL) plus normal tx fees. Top up with $0.50 USDC when low.
 // NOTE: the very first CCTP receive on Solana requires an initial seed from the platform.
@@ -127,9 +179,13 @@ async function topUpGasFromUsdc() {
   tx.sign([agentKeypair]);
 
   return withFallback(async (connection) => {
-    const id = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 });
-    const conf = await connection.confirmTransaction(id, 'confirmed');
-    if (conf.value.err) throw new Error(`USDC→SOL gas topup failed: ${JSON.stringify(conf.value.err)}`);
+    const serialized = tx.serialize();
+    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+    console.log('Gas topup submitted:', id);
+    await pollSignatureStatus(connection, id, {
+      label: 'Gas topup',
+      resendFn: () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 }),
+    });
     console.log('Gas topped up from USDC:', id);
     return id;
   });
@@ -246,17 +302,12 @@ async function jupiterSwap(solAddress, symbol, usdcAmount) {
   const serialized = transaction.serialize();
 
   const txid = await withFallback(async (connection) => {
-    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 3 });
-    const conf = await connection.confirmTransaction(id, 'confirmed');
-    if (conf.value.err) {
-      const txData = await connection.getTransaction(id, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      }).catch(() => null);
-      const logs = txData?.meta?.logMessages?.join('\n') || '';
-      throw new Error(`Jupiter swap failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
-    }
-    return id;
+    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+    console.log('Jupiter buy (agent) submitted:', id);
+    return pollSignatureStatus(connection, id, {
+      label: 'Jupiter buy',
+      resendFn: () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 }),
+    });
   });
 
   return {
@@ -310,17 +361,12 @@ async function jupiterSwapXStockToUsdc(mintAddress, rawInputAmount) {
   const serialized = transaction.serialize();
 
   const txid = await withFallback(async (connection) => {
-    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 3 });
-    const conf = await connection.confirmTransaction(id, 'confirmed');
-    if (conf.value.err) {
-      const txData = await connection.getTransaction(id, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      }).catch(() => null);
-      const logs = txData?.meta?.logMessages?.join('\n') || '';
-      throw new Error(`Jupiter swap failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
-    }
-    return id;
+    const id = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+    console.log('Jupiter sell swap submitted:', id);
+    return pollSignatureStatus(connection, id, {
+      label: 'Jupiter sell swap',
+      resendFn: () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 }),
+    });
   });
 
   return {
@@ -445,31 +491,14 @@ async function countersignAndSubmit(userSignedTxBase64, blockhash, lastValidBloc
 
   return withFallback(async (connection) => {
     const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
-
     const id = await sendRaw();
-    console.log(`${label} submitted:`, id, '— confirming (up to 120s)...');
-
-    const retryTimer = setInterval(() => sendRaw().catch(() => {}), 3000);
-
-    let conf;
-    try {
-      conf = await connection.confirmTransaction(
-        { signature: id, blockhash, lastValidBlockHeight },
-        'confirmed'
-      );
-    } finally {
-      clearInterval(retryTimer);
-    }
-
-    if (conf.value.err) {
-      const txData = await connection.getTransaction(id, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      }).catch(() => null);
-      const logs = txData?.meta?.logMessages?.join('\n') || '';
-      throw new Error(`${label} failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
-    }
-    return id;
+    console.log(`${label} submitted:`, id, '— polling for confirmation…');
+    return pollSignatureStatus(connection, id, {
+      label,
+      blockhash,
+      lastValidBlockHeight,
+      resendFn: sendRaw,
+    });
   });
 }
 
@@ -544,9 +573,13 @@ async function transferXStockToUser(mintAddress, userSolAddress, rawAmount) {
     tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 100_000 }));
     tx.add(transferIx);
 
-    const txid = await connection.sendTransaction(tx, [agentKeypair], { maxRetries: 3 });
-    await connection.confirmTransaction(txid, 'confirmed');
-
+    const serialized = tx.serialize();
+    const txid = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
+    console.log('xStock→user transfer submitted:', txid);
+    await pollSignatureStatus(connection, txid, {
+      label: 'xStock transfer to user',
+      resendFn: () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 }),
+    });
     return txid;
   });
 }
@@ -689,30 +722,14 @@ async function submitJupiterBuyTransaction(userSignedTxBase64, blockhash, lastVa
 
   return withFallback(async (connection) => {
     const sendRaw = () => connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 0 });
-
     const id = await sendRaw();
-    console.log('Jupiter buy submitted:', id, '— confirming (up to 120s)...');
-
-    const retryTimer = setInterval(() => { sendRaw().catch(() => {}); }, 3000);
-    let conf;
-    try {
-      conf = await connection.confirmTransaction(
-        { signature: id, blockhash, lastValidBlockHeight },
-        'confirmed'
-      );
-    } finally {
-      clearInterval(retryTimer);
-    }
-
-    if (conf.value.err) {
-      const txData = await connection.getTransaction(id, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      }).catch(() => null);
-      const logs = txData?.meta?.logMessages?.join('\n') || '';
-      throw new Error(`Jupiter buy failed on-chain (${id}): ${JSON.stringify(conf.value.err)}\nLogs:\n${logs}`);
-    }
-    return id;
+    console.log('Jupiter buy (user) submitted:', id, '— polling…');
+    return pollSignatureStatus(connection, id, {
+      label: 'Jupiter buy',
+      blockhash,
+      lastValidBlockHeight,
+      resendFn: sendRaw,
+    });
   });
 }
 
@@ -837,5 +854,6 @@ module.exports = {
   buildSolGasTopupTransaction,
   submitSolGasTopup,
   countersignAndSubmit,
+  pollSignatureStatus,
   XSTOCK_MINTS,
 };
