@@ -47,12 +47,21 @@ router.get('/:chain', async (req, res) => {
       };
     }
 
-    // Merge with local position tracking
-    const positions = db.prepare(
-      'SELECT * FROM positions WHERE user_id = ? AND chain = ?'
-    ).all(user.id, chain);
+    // Enrich on-chain positions with avg_price from DB (for PnL), but never
+    // show DB-only ghost positions that no longer exist on-chain.
+    const dbPositions = db.prepare(
+      'SELECT * FROM positions WHERE user_id = ?'
+    ).all(user.id);
+    const dbBySymbol = Object.fromEntries(
+      dbPositions.map(p => [p.symbol.toUpperCase(), p])
+    );
 
-    res.json({ ...portfolio, trackedPositions: positions });
+    const trackedPositions = (portfolio.positions || []).map(p => {
+      const dbRow = dbBySymbol[p.symbol.toUpperCase()];
+      return { ...p, avg_price: dbRow?.avg_price || 0, chain };
+    });
+
+    res.json({ ...portfolio, trackedPositions });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Portfolio fetch failed' });

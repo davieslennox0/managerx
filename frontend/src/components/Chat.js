@@ -244,7 +244,7 @@ export default function Chat({ user, chain }) {
 
           // CCTP mint recipient = user's own USDC ATA (agent only collects fee)
           const amountMist = BigInt(Math.round(action.amount * 1e6));
-          const userSolPubkey = new SolPublicKey(user.solAddress);
+          const userSolPubkey = new SolPublicKey(userSolAddress);
           const USDC_MINT = new SolPublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
           const userUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, userSolPubkey);
           const mintRecipientHex = '0x' + Buffer.from(userUsdcAta.toBytes()).toString('hex');
