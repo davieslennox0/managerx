@@ -9,15 +9,27 @@ import Portfolio from './Portfolio';
 // ── Export Key ───────────────────────────────────────────────────────────────
 function ExportKeyBtn() {
   const { initExportProcess } = useEmbeddedReveal();
+  const [err, setErr] = React.useState('');
+  const handleExport = async () => {
+    setErr('');
+    try {
+      await initExportProcess();
+    } catch (e) {
+      setErr(e.message || 'Export failed');
+    }
+  };
   return (
-    <button onClick={() => initExportProcess()} style={{
-      fontSize: 8, color: '#555', border: '1px solid #1C1C22',
-      background: 'none', cursor: 'pointer', padding: '5px 8px',
-      borderRadius: 4, width: '100%', letterSpacing: '0.1em',
-      fontFamily: 'Georgia, serif',
-    }}>
-      EXPORT KEY
-    </button>
+    <div>
+      <button onClick={handleExport} style={{
+        fontSize: 8, color: '#555', border: '1px solid #1C1C22',
+        background: 'none', cursor: 'pointer', padding: '5px 8px',
+        borderRadius: 4, width: '100%', letterSpacing: '0.1em',
+        fontFamily: 'Georgia, serif',
+      }}>
+        EXPORT KEY
+      </button>
+      {err && <div style={{ fontSize: 9, color: '#8A4A4A', marginTop: 4, wordBreak: 'break-word' }}>{err}</div>}
+    </div>
   );
 }
 
