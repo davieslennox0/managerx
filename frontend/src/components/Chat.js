@@ -28,19 +28,6 @@ function base58ToHex(str) {
   return '0x' + hex;
 }
 
-// Returns the deterministic SPL Token USDC ATA for a Solana address.
-// USDC uses the legacy SPL Token program, not Token-2022.
-function getUserUsdcAta(userSolAddress) {
-  const ASSOC_PROG = new SolPublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bM3');
-  const TOKEN_PROG = new SolPublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-  const USDC_MINT  = new SolPublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
-  const [ata] = SolPublicKey.findProgramAddressSync(
-    [new SolPublicKey(userSolAddress).toBytes(), TOKEN_PROG.toBytes(), USDC_MINT.toBytes()],
-    ASSOC_PROG
-  );
-  return ata.toBase58();
-}
-
 function ConfirmModal({ action, onConfirm, onCancel }) {
   const isBridge = action.action === 'bridge';
   return (
