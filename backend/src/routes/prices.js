@@ -2,8 +2,8 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 
-// Cache prices for 60s
-let cache = { data: null, ts: 0 };
+// Cache prices for 60s, keyed by chain (each chain has a different symbol set).
+const cache = {};
 
 const STOCKS = {
   arbitrum: ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'COIN', 'MSTR', 'NFLX'],
@@ -14,11 +14,13 @@ const STOCKS = {
 };
 
 router.get('/:chain', async (req, res) => {
+  const chain = req.params.chain;
   const now = Date.now();
-  if (cache.data && now - cache.ts < 60000) return res.json(cache.data);
+  const cached = cache[chain];
+  if (cached && now - cached.ts < 60000) return res.json(cached.data);
 
   try {
-    const symbols = STOCKS[req.params.chain] || STOCKS.arbitrum;
+    const symbols = STOCKS[chain] || STOCKS.arbitrum;
     const results = {};
     await Promise.all(symbols.map(async sym => {
       try {
@@ -28,7 +30,7 @@ router.get('/:chain', async (req, res) => {
         if (price) results[sym] = { price: price.toFixed(2), change: prev ? (((price - prev) / prev) * 100).toFixed(2) : '0.00' };
       } catch { results[sym] = { price: '—', change: '0.00' }; }
     }));
-    cache = { data: results, ts: now };
+    cache[chain] = { data: results, ts: now };
     res.json(results);
   } catch (e) {
     res.json({});

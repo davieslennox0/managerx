@@ -58,6 +58,44 @@ async function pollSignatureStatus(connection, signature, opts = {}) {
   }
 }
 
+// Measure the actual token balance change for one account from an already-confirmed
+// transaction, instead of trusting a client-supplied amount. Critical for any route that
+// moves funds out of the shared agent ATA — the client cannot be allowed to declare how
+// much landed there. Returns a BigInt (positive = account balance increased).
+async function getTokenAtaDelta(signature, ataAddress) {
+  return withFallback(async (connection) => {
+    const tx = await connection.getTransaction(signature, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    });
+    if (!tx) throw new Error(`Could not fetch transaction ${signature} to verify balance delta`);
+
+    const msg = tx.transaction.message;
+    let getKey, numKeys;
+    if (typeof msg.getAccountKeys === 'function') {
+      const keys = msg.getAccountKeys({ accountKeysFromLookups: tx.meta.loadedAddresses });
+      getKey = (i) => keys.get(i);
+      numKeys = keys.length;
+    } else {
+      getKey = (i) => msg.accountKeys[i];
+      numKeys = msg.accountKeys.length;
+    }
+
+    let ataIndex = -1;
+    for (let i = 0; i < numKeys; i++) {
+      const key = getKey(i);
+      if (key && key.toBase58() === ataAddress) { ataIndex = i; break; }
+    }
+    if (ataIndex === -1) throw new Error(`ATA ${ataAddress} not involved in transaction ${signature}`);
+
+    const pre = tx.meta.preTokenBalances?.find((b) => b.accountIndex === ataIndex);
+    const post = tx.meta.postTokenBalances?.find((b) => b.accountIndex === ataIndex);
+    const preAmount = pre ? BigInt(pre.uiTokenAmount.amount) : 0n;
+    const postAmount = post ? BigInt(post.uiTokenAmount.amount) : 0n;
+    return postAmount - preAmount;
+  });
+}
+
 // Gas management: keep 0.005 SOL on hand — enough to cover CCTP depositForBurn
 // rent (~0.003 SOL) plus normal tx fees. Top up with $0.50 USDC when low.
 // NOTE: the very first CCTP receive on Solana requires an initial seed from the platform.
@@ -1045,6 +1083,7 @@ module.exports = {
   submitSolGasTopup,
   countersignAndSubmit,
   pollSignatureStatus,
+  getTokenAtaDelta,
   buildJupiterSellTransaction,
   submitJupiterSellTransaction,
   getUserSolBalance,

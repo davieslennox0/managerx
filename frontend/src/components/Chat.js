@@ -553,7 +553,7 @@ export default function Chat({ user, chain }) {
     }
     setMessages(prev => [...prev, { role: 'assistant', content: '🔄 Checking for stuck USDC on Solana...' }]);
     try {
-      const { data: balData } = await axios.get('/api/trade/agent-usdc-balance',
+      const { data: balData } = await axios.get('/api/trade/recoverable-balance',
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (!balData.rawAmount) {
@@ -561,7 +561,7 @@ export default function Chat({ user, chain }) {
         return;
       }
       const { data } = await axios.post('/api/trade/recover-solana-usdc',
-        { userSuiAddress: suiAddress, rawAmount: balData.rawAmount },
+        { userSuiAddress: suiAddress },
         { headers: { Authorization: `Bearer ${token}` }, timeout: 120000 }
       );
       setMessages(prev => [...prev, { role: 'assistant', content: `✅ ${data.message}` }]);

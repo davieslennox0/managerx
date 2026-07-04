@@ -78,3 +78,18 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+// Per-user ledger of USDC that landed in the shared agent Solana ATA but failed to
+// bridge onward. recover-solana-usdc sums each user's own unconsumed rows here instead
+// of trusting a client-supplied amount against the pool's total balance — the pool is
+// shared across all users, so nothing else scopes a recovery to the right owner.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pending_recoveries (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    raw_amount INTEGER NOT NULL,
+    reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    consumed_at DATETIME
+  )
+`);

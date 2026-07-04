@@ -170,7 +170,8 @@ async function depositForBurn() {
     .rpc();
 
   console.log('depositForBurn tx:', txSig);
-  await connection.confirmTransaction(txSig, 'confirmed');
+  const { pollSignatureStatus } = require('../lib/solana');
+  await pollSignatureStatus(connection, txSig, { label: 'depositForBurn' });
 
   // Read the CCTP message from the event data account.
   // Account layout (292 bytes): disc(8) + sender_key(32) + vec_len_LE_u32(4) + cctp_msg(248)

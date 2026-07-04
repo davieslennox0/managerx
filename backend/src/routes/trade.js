@@ -5,7 +5,7 @@ const db = require('../db');
 const { getPrice } = require('./prices');
 const { executeArbTrade } = require('../lib/arbitrum');
 const { executeSuiTrade, sponsorSuiTransaction } = require('../lib/sui');
-const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, buildJupiterSellTransaction, submitJupiterSellTransaction, getUserSolBalance, buildUserGasBootstrapSwap, USER_GAS_THRESHOLD_LAMPORTS, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, XSTOCK_MINTS } = require('../lib/solana');
+const { jupiterSwapXStockToUsdc, buildSellTransferTransaction, countersignAndSubmitSellTransfer, countersignAndSubmit, estimateGasCostUsdc, ensureGas, topUpGasFromUsdc, buildJupiterBuyTransaction, submitJupiterBuyTransaction, buildJupiterSellTransaction, submitJupiterSellTransaction, getUserSolBalance, buildUserGasBootstrapSwap, USER_GAS_THRESHOLD_LAMPORTS, ensureUserUsdcAta, getUserUsdcAta, getMintDecimals, getUserSolUsdcBalance, buildSolUsdcTransferToAgent, buildSolGasTopupTransaction, submitSolGasTopup, pollSignatureStatus, getTokenAtaDelta, XSTOCK_MINTS } = require('../lib/solana');
 const { bridgeUsdcSuiToSolana, bridgeUsdcSolanaToSui } = require('../lib/cctp');
 const { storeTradeReceipt } = require('../lib/walrus');
 
@@ -30,6 +30,9 @@ router.post('/sponsor-sui-tx', async (req, res) => {
 
   const { txKindBytes, senderAddress } = req.body;
   if (!txKindBytes || !senderAddress) return res.status(400).json({ error: 'Missing txKindBytes or senderAddress' });
+  if (senderAddress !== user.sui_address) {
+    return res.status(403).json({ error: 'senderAddress does not match your account' });
+  }
 
   try {
     const result = await sponsorSuiTransaction(txKindBytes, senderAddress);
@@ -147,20 +150,30 @@ router.post('/submit-sell-swap', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { signedTx, blockhash, lastValidBlockHeight, rawUsdcOutput, userSuiAddress, symbol, shares, price } = req.body;
-  if (!signedTx || !blockhash || !lastValidBlockHeight || !rawUsdcOutput || !userSuiAddress) {
+  const { signedTx, blockhash, lastValidBlockHeight, userSuiAddress, symbol, shares, price } = req.body;
+  if (!signedTx || !blockhash || !lastValidBlockHeight || !userSuiAddress) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  // Step 1: Confirm the Jupiter sell swap, then measure what it actually deposited into
+  // the shared agent ATA. Never trust a client-supplied output amount here — the agent
+  // ATA is shared across all users, so a forged amount would bridge out of the pool.
+  let swapTxHash, verifiedRawUsdc;
   try {
-    // Step 1: Confirm the Jupiter sell swap
-    const swapTxHash = await submitJupiterSellTransaction(signedTx, blockhash, lastValidBlockHeight);
+    swapTxHash = await submitJupiterSellTransaction(signedTx, blockhash, lastValidBlockHeight);
     console.log('Sell swap confirmed:', swapTxHash, '— USDC in agent ATA, bridging to Sui…');
+    verifiedRawUsdc = Number(await getTokenAtaDelta(swapTxHash, process.env.AGENT_SOL_USDC_ATA));
+    if (!(verifiedRawUsdc > 0)) throw new Error('Sell swap did not deposit USDC into agent wallet');
+  } catch (e) {
+    console.error('submit-sell-swap error (swap step):', e);
+    return res.status(500).json({ error: e.message });
+  }
 
+  try {
     // Step 2: Deduct platform fee, bridge the rest to user's Sui wallet
     const feeBps = parseInt(process.env.PLATFORM_FEE_BPS || '0');
-    const feeRaw   = Math.round(rawUsdcOutput * feeBps / 10000);
-    const bridgeRaw = Math.max(rawUsdcOutput - feeRaw, 0);
+    const feeRaw   = Math.round(verifiedRawUsdc * feeBps / 10000);
+    const bridgeRaw = Math.max(verifiedRawUsdc - feeRaw, 0);
     if (bridgeRaw <= 0) throw new Error('Sell proceeds too small to bridge');
 
     const bridge = await bridgeUsdcSolanaToSui(bridgeRaw, userSuiAddress);
@@ -194,8 +207,12 @@ router.post('/submit-sell-swap', async (req, res) => {
       usdcBridged: (bridgeRaw / 1e6).toFixed(6),
     });
   } catch (e) {
-    console.error('submit-sell-swap error:', e);
-    res.status(500).json({ error: e.message });
+    console.error('submit-sell-swap error (bridge step):', e);
+    db.prepare('INSERT INTO pending_recoveries (id, user_id, raw_amount, reason) VALUES (?, ?, ?, ?)')
+      .run(uuid(), user.id, verifiedRawUsdc, `sell-swap bridge-out failed: ${e.message}`.slice(0, 200));
+    res.status(500).json({
+      error: `Sell completed but bridging to Sui failed: ${e.message}. Your $${(verifiedRawUsdc / 1e6).toFixed(6)} USDC is safe — use Recover to retry.`,
+    });
   }
 });
 
@@ -327,19 +344,34 @@ router.post('/submit-sol-to-sui-bridge', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { signedTx, blockhash, lastValidBlockHeight, rawAmount, userSuiAddress } = req.body;
-  if (!signedTx || !blockhash || !lastValidBlockHeight || !rawAmount || !userSuiAddress) {
+  const { signedTx, blockhash, lastValidBlockHeight, userSuiAddress } = req.body;
+  if (!signedTx || !blockhash || !lastValidBlockHeight || !userSuiAddress) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
+  // Step 1: Submit the transfer, then measure what actually landed in the shared agent
+  // ATA. Never trust a client-supplied rawAmount decoupled from the real signed transfer.
+  let transferTxHash, verifiedRawAmount;
   try {
-    await countersignAndSubmit(signedTx, blockhash, lastValidBlockHeight, 'USDC bridge transfer');
+    transferTxHash = await countersignAndSubmit(signedTx, blockhash, lastValidBlockHeight, 'USDC bridge transfer');
     console.log('User USDC arrived in agent wallet — bridging to Sui...');
-    const bridge = await bridgeUsdcSolanaToSui(rawAmount, userSuiAddress);
+    verifiedRawAmount = Number(await getTokenAtaDelta(transferTxHash, process.env.AGENT_SOL_USDC_ATA));
+    if (!(verifiedRawAmount > 0)) throw new Error('Transfer did not deposit USDC into agent wallet');
+  } catch (e) {
+    console.error('submit-sol-to-sui-bridge error (transfer step):', e);
+    return res.status(500).json({ error: e.message });
+  }
+
+  try {
+    const bridge = await bridgeUsdcSolanaToSui(verifiedRawAmount, userSuiAddress);
     res.json({ ok: true, suiMintTxHash: bridge.suiMintTxHash, burnTxHash: bridge.burnTxHash });
   } catch (e) {
-    console.error('submit-sol-to-sui-bridge error:', e);
-    res.status(500).json({ error: e.message });
+    console.error('submit-sol-to-sui-bridge error (bridge step):', e);
+    db.prepare('INSERT INTO pending_recoveries (id, user_id, raw_amount, reason) VALUES (?, ?, ?, ?)')
+      .run(uuid(), user.id, verifiedRawAmount, `sol-to-sui bridge-out failed: ${e.message}`.slice(0, 200));
+    res.status(500).json({
+      error: `Transfer completed but bridging to Sui failed: ${e.message}. Your $${(verifiedRawAmount / 1e6).toFixed(6)} USDC is safe — use Recover to retry.`,
+    });
   }
 });
 
@@ -612,99 +644,6 @@ router.post('/execute', async (req, res) => {
   }
 });
 
-// Build CCTP burn transaction for user to sign
-router.post('/build-burn', async (req, res) => {
-  const user = authUser(req);
-  if (!user) return res.status(401).json({ error: 'Unauthorized' });
-
-  const { amount, currency, suiAddress } = req.body;
-  
-  try {
-    // Pre-check: ensure agent has enough SOL to complete the Solana side before the user burns.
-    const gasStatus = await ensureGas();
-    if (!gasStatus.ok) {
-      const userSolUsdcBalance = await getUserSolUsdcBalance(user.sol_address);
-      return res.status(402).json({
-        error: 'GAS_INSUFFICIENT',
-        needsBridge: true,
-        solBalance: gasStatus.solBalance,
-        usdcBalance: gasStatus.usdcBalance,
-        userSolUsdcBalance,
-      });
-    }
-
-    const { Transaction } = require('@mysten/sui/transactions');
-    const { SuiClient, getFullnodeUrl } = require('@mysten/sui/client');
-
-    const SUI_CCTP = {
-      tokenMessengerMinter: '0x2aa6c5d56376c371f88a6cc42e852824994993cb9bab8d3e6450cbe3cb32b94e',
-      tokenMessengerMinterState: '0x45993eecc0382f37419864992c12faee2238f5cfe22b98ad3bf455baf65c8a2f',
-      messageTransmitterState: '0xf68268c3d9b1df3215f2439400c1c4ea08ac4ef4bb7d6f3ca6a2a239e17510af',
-      usdcTreasury: '0x57d6725e7a8b49a7b2a612f6bd66ab5f39fc95332ca48be421c3229d514a6de7',
-      denyList: '0x0000000000000000000000000000000000000000000000000000000000000403',
-    };
-
-    const USDC_SUI_TYPE = '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC';
-    const SOLANA_DOMAIN = 5;
-    const AGENT_SOL_USDC_ATA = process.env.AGENT_SOL_USDC_ATA;
-
-    // Convert Solana ATA to bytes32
-    const { PublicKey } = require('@solana/web3.js');
-    const ataBytes = Array.from(new PublicKey(AGENT_SOL_USDC_ATA).toBytes());
-
-    const client = new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
-    const amountUsdc = currency === 'usd' ? amount : amount;
-    const amountMist = BigInt(Math.round(amountUsdc * 1e6));
-
-    // Get user's USDC coins
-    const coins = await client.getCoins({ owner: suiAddress, coinType: USDC_SUI_TYPE });
-    if (!coins.data.length) return res.status(400).json({ error: 'No USDC in Sui wallet' });
-
-    const totalBalance = coins.data.reduce((a, c) => a + BigInt(c.balance), 0n);
-    if (totalBalance < amountMist) return res.status(400).json({ error: 'Insufficient USDC balance' });
-
-    const tx = new Transaction();
-    tx.setSender(suiAddress);
-
-    // Merge all coin objects so fragmented balances combine into one
-    const primaryCoin = tx.object(coins.data[0].coinObjectId);
-    if (coins.data.length > 1) {
-      tx.mergeCoins(primaryCoin, coins.data.slice(1).map(c => tx.object(c.coinObjectId)));
-    }
-
-    let coinToUse;
-    if (totalBalance === amountMist) {
-      coinToUse = primaryCoin;
-    } else {
-      const [splitCoin] = tx.splitCoins(primaryCoin, [amountMist]);
-      coinToUse = splitCoin;
-    }
-
-    tx.moveCall({
-      target: `${SUI_CCTP.tokenMessengerMinter}::deposit_for_burn::deposit_for_burn`,
-      typeArguments: [USDC_SUI_TYPE],
-      arguments: [
-        coinToUse,
-        tx.pure.u32(SOLANA_DOMAIN),
-        tx.pure.vector('u8', ataBytes),
-        tx.object(SUI_CCTP.tokenMessengerMinterState),
-        tx.object(SUI_CCTP.messageTransmitterState),
-        tx.object(SUI_CCTP.denyList),
-        tx.object(SUI_CCTP.usdcTreasury),
-      ],
-    });
-
-    // Serialize transaction for frontend
-    const txBytes = await tx.build({ client });
-    const txBase64 = Buffer.from(txBytes).toString('base64');
-
-    res.json({ transaction: txBase64, amount: amountUsdc });
-  } catch (e) {
-    console.error('Build burn error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // Bridge USDC from Sui → Solana. The frontend burned USDC on Sui with the user's own
 // USDC ATA as mintRecipient; this route attests and mints directly into that ATA.
 router.post('/bridge-to-solana', async (req, res) => {
@@ -759,38 +698,48 @@ router.post('/bridge-to-solana', async (req, res) => {
   }
 });
 
-// Check agent's Solana USDC balance and bridge any amount to the user's Sui wallet.
-// Useful for recovering USDC that got stuck in the agent wallet from a failed/incomplete bridge.
+// Bridge USDC that got stuck in the shared agent wallet from a failed/incomplete bridge
+// back to the user's Sui wallet. The agent ATA pools funds from ALL users, so the amount
+// recoverable is capped by this user's own pending_recoveries ledger, never by the pool's
+// total balance or a client-supplied figure — otherwise one user could drain another's
+// in-flight funds.
 router.post('/recover-solana-usdc', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  // rawAmount: exact μUSDC to recover (required). Never bridge more than the user's own amount.
-  const { userSuiAddress, rawAmount } = req.body;
+  const { userSuiAddress } = req.body;
   if (!userSuiAddress) return res.status(400).json({ error: 'Missing userSuiAddress' });
-  if (!rawAmount || rawAmount <= 0) return res.status(400).json({ error: 'Missing or invalid rawAmount' });
 
   try {
+    const { total: owedRaw } = db.prepare(
+      `SELECT COALESCE(SUM(raw_amount), 0) as total FROM pending_recoveries WHERE user_id = ? AND consumed_at IS NULL`
+    ).get(user.id);
+
+    if (!owedRaw) {
+      return res.json({ success: true, message: 'No recoverable USDC on record for your account', balance: 0 });
+    }
+
     const { getConnection: _getSolConn } = require('../lib/solana_connection');
     const { PublicKey: _PublicKey } = require('@solana/web3.js');
     const connection = _getSolConn();
-
     const usdcATA = new _PublicKey(process.env.AGENT_SOL_USDC_ATA);
     const balanceInfo = await connection.getTokenAccountBalance(usdcATA);
     const agentBalance = parseInt(balanceInfo.value.amount, 10);
 
-    if (agentBalance === 0) {
-      return res.json({ success: true, message: 'No USDC found on Solana agent wallet', balance: 0 });
+    if (agentBalance < owedRaw) {
+      return res.status(409).json({ error: 'Agent wallet balance is temporarily lower than your recoverable amount — try again shortly.' });
     }
 
-    const bridgeAmount = Math.min(rawAmount, agentBalance);
-    console.log(`Recovering ${bridgeAmount} μUSDC from Solana → Sui (${userSuiAddress})`);
-    const result = await bridgeUsdcSolanaToSui(bridgeAmount, userSuiAddress);
+    console.log(`Recovering ${owedRaw} μUSDC from Solana → Sui (${userSuiAddress}) for user ${user.id}`);
+    const result = await bridgeUsdcSolanaToSui(owedRaw, userSuiAddress);
+
+    db.prepare(`UPDATE pending_recoveries SET consumed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND consumed_at IS NULL`)
+      .run(user.id);
 
     res.json({
       success: true,
-      message: `Bridged ${(bridgeAmount / 1e6).toFixed(6)} USDC from Solana to your Sui wallet`,
-      usdcAmount: bridgeAmount / 1e6,
+      message: `Bridged ${(owedRaw / 1e6).toFixed(6)} USDC from Solana to your Sui wallet`,
+      usdcAmount: owedRaw / 1e6,
       ...result,
     });
   } catch (e) {
@@ -799,15 +748,16 @@ router.post('/recover-solana-usdc', async (req, res) => {
   }
 });
 
-// Returns the agent's USDC balance — used by the frontend RECOVER button
-router.get('/agent-usdc-balance', async (req, res) => {
+// Returns this user's own recoverable USDC (sum of unconsumed pending_recoveries), used by
+// the frontend RECOVER button. Deliberately scoped per-user, not the agent's total balance.
+router.get('/recoverable-balance', async (req, res) => {
   const user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const { getAgentGasStatus } = require('../lib/solana');
-    const { usdcBalance } = await getAgentGasStatus();
-    const rawAmount = Math.round(usdcBalance * 1e6);
-    res.json({ usdcBalance, rawAmount });
+    const { total } = db.prepare(
+      `SELECT COALESCE(SUM(raw_amount), 0) as total FROM pending_recoveries WHERE user_id = ? AND consumed_at IS NULL`
+    ).get(user.id);
+    res.json({ rawAmount: total, usdcBalance: total / 1e6 });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

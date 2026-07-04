@@ -6,6 +6,12 @@ const PACKAGE_ID = process.env.SUI_PACKAGE_ID;
 const MANAGER_STATE = process.env.SUI_MANAGER_STATE;
 const ADMIN_CAP = process.env.SUI_ADMIN_CAP;
 
+// Only known-safe move calls may be gas-sponsored by the agent. Must match the CCTP
+// package deposit_for_burn calls built by the frontend (see cctp.js SUI_CCTP).
+const SPONSORABLE_CALLS = [
+  { module: 'deposit_for_burn', function: 'deposit_for_burn', package: '0x2aa6c5d56376c371f88a6cc42e852824994993cb9bab8d3e6450cbe3cb32b94e' },
+];
+
 function getClient() {
   return new SuiClient({ url: process.env.SUI_RPC_URL || getFullnodeUrl('mainnet') });
 }
@@ -113,6 +119,23 @@ async function sponsorSuiTransaction(txKindBase64, senderAddress) {
   const tx = Transaction.fromKind(txKindBytes);
   tx.setSender(senderAddress);
   tx.setGasOwner(agentAddr);
+
+  // Never sponsor gas for an arbitrary move call — restrict to the known CCTP
+  // deposit_for_burn call, otherwise any authenticated user could grief the agent's
+  // SUI gas reserve by requesting sponsorship for unrelated transactions.
+  const { commands } = tx.getData();
+  if (!commands || commands.length !== 1 || commands[0].$kind !== 'MoveCall') {
+    throw new Error('Sponsorship only supports a single move-call transaction');
+  }
+  const call = commands[0].MoveCall;
+  const isAllowed = SPONSORABLE_CALLS.some((c) =>
+    call.module === c.module &&
+    call.function === c.function &&
+    call.package.toLowerCase() === c.package.toLowerCase()
+  );
+  if (!isAllowed) {
+    throw new Error(`Move call ${call.package}::${call.module}::${call.function} is not sponsorable`);
+  }
 
   // Pick the agent's highest-balance SUI coin as gas payment
   const { data: coins } = await client.getCoins({ owner: agentAddr, coinType: '0x2::sui::SUI' });
