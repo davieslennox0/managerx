@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useEmbeddedReveal } from '@dynamic-labs/sdk-react-core';
+import { useEmbeddedReveal, useStepUpAuthentication } from '@dynamic-labs/sdk-react-core';
 
 import axios from 'axios';
 import Chat from './Chat';
@@ -9,10 +9,18 @@ import Portfolio from './Portfolio';
 // ── Export Key ───────────────────────────────────────────────────────────────
 function ExportKeyBtn() {
   const { initExportProcess } = useEmbeddedReveal();
+  const { isStepUpRequired, promptStepUpAuth } = useStepUpAuthentication();
   const [err, setErr] = React.useState('');
   const handleExport = async () => {
     setErr('');
     try {
+      // Dashboard has "Require step-up verification before exporting wallet
+      // private keys" enabled — Dynamic's backend rejects a bare
+      // initExportProcess() with 403 unless this check+prompt runs first.
+      const stepUpRequired = await isStepUpRequired({ scope: 'wallet:export' });
+      if (stepUpRequired) {
+        await promptStepUpAuth({ requestedScopes: ['wallet:export'] });
+      }
       await initExportProcess();
     } catch (e) {
       setErr(e.message || 'Export failed');
