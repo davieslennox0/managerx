@@ -47,7 +47,8 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            set -e
             chmod -R 755 /root/manager-v2/frontend/build
             systemctl restart caddy
-            pm2 restart manager-backend
+            /root/.local/share/fnm/node-versions/v20.20.2/installation/bin/pm2 restart manager-backend
             echo "Deploy complete - $(date)"
