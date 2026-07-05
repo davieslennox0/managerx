@@ -14,8 +14,24 @@ export default function App() {
   const [chain] = useState('sui');
   const [showTour, setShowTour] = useState(false);
 
+  // dynamicUser can blip falsy for a moment during in-app reauth flows (e.g. the
+  // step-up popup required before wallet key export) before Dynamic's SDK settles
+  // back into the logged-in state. Without this grace period, that single blip
+  // triggers an instant, hard logout — tearing down the app (and any in-progress
+  // export modal) mid-flow. Only treat the user as actually logged out once
+  // dynamicUser has stayed falsy for a beat.
+  const [confirmedLoggedOut, setConfirmedLoggedOut] = useState(false);
   useEffect(() => {
-    if (!dynamicUser) { setUser(null); return; }
+    if (dynamicUser) { setConfirmedLoggedOut(false); return; }
+    const timer = setTimeout(() => {
+      setConfirmedLoggedOut(true);
+      setUser(null);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [dynamicUser]);
+
+  useEffect(() => {
+    if (!dynamicUser) { return; }
 
     console.log('userWallets:', userWallets?.map(w => ({ address: w.address, chain: w.chain })));
 
@@ -51,7 +67,7 @@ export default function App() {
     setUser(null);
   };
 
-  if (!dynamicUser) return <Onboarding />;
+  if (confirmedLoggedOut) return <Onboarding />;
 
   if (!user) return (
     <div style={{
