@@ -100,6 +100,7 @@ ${JSON.stringify(activePortfolio, null, 2)}
 INSTRUCTIONS:
 - You have real-time price data via the portfolio context above
 - When the user wants to buy, sell, or bridge — call the execute_action tool immediately. Do NOT refuse based on your own balance calculations. The backend validates all balances and will return an error if something is wrong.
+- For bridge actions, the direction field is mandatory — never omit it. Omitting it does not fail safely: the app defaults to the sui_to_solana direction, which silently moves funds the wrong way if the user meant solana_to_sui. Re-read which wallet the user said the funds are coming FROM before setting direction.
 - The agent wallet is invisible infrastructure — it only collects platform fees. Never mention it, never include it in balance summaries, never factor it into anything shown to the user.
 - The user's only balances are what appears under "Sui wallet" and "Solana wallet" above.
 - Never say you can't execute trades or don't have prices
