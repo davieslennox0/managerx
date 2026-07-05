@@ -123,11 +123,23 @@ async function sponsorSuiTransaction(txKindBase64, senderAddress) {
   // Never sponsor gas for an arbitrary move call — restrict to the known CCTP
   // deposit_for_burn call, otherwise any authenticated user could grief the agent's
   // SUI gas reserve by requesting sponsorship for unrelated transactions.
+  //
+  // The real burn tx isn't always a bare single MoveCall: the frontend merges
+  // fragmented coin objects (MergeCoins) and/or splits out the exact burn amount
+  // (SplitCoins) before the deposit_for_burn call. Allow those as setup steps —
+  // they only ever operate on coin objects, never move funds anywhere — as long
+  // as the final command is the allowed move call.
   const { commands } = tx.getData();
-  if (!commands || commands.length !== 1 || commands[0].$kind !== 'MoveCall') {
-    throw new Error('Sponsorship only supports a single move-call transaction');
+  if (!commands || commands.length === 0) {
+    throw new Error('Sponsorship requires at least one command');
   }
-  const call = commands[0].MoveCall;
+  const lastCommand = commands[commands.length - 1];
+  const setupCommands = commands.slice(0, -1);
+  const setupAllowed = setupCommands.every((c) => c.$kind === 'MergeCoins' || c.$kind === 'SplitCoins');
+  if (!setupAllowed || lastCommand.$kind !== 'MoveCall') {
+    throw new Error('Sponsorship only supports coin merge/split setup followed by a single allowed move call');
+  }
+  const call = lastCommand.MoveCall;
   const isAllowed = SPONSORABLE_CALLS.some((c) =>
     call.module === c.module &&
     call.function === c.function &&
