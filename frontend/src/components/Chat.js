@@ -96,6 +96,7 @@ export default function Chat({ user, chain }) {
       let suiTxHash = null;
       let solTxHash = null;
       let execUserSuiAddress = null;
+      let userUsdcAta = null;
 
       if (chain === 'sui' && action.action === 'bridge' && action.direction === 'solana_to_sui') {
         // ── BRIDGE Solana→Sui: user signs Solana USDC transfer to agent, agent CCTP-bridges to Sui ──
@@ -233,7 +234,7 @@ export default function Chat({ user, chain }) {
           const amountMist = BigInt(Math.round(action.amount * 1e6));
           const userSolPubkey = new SolPublicKey(userSolAddress);
           const USDC_MINT = new SolPublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
-          const userUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, userSolPubkey);
+          userUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, userSolPubkey);
           const mintRecipientHex = '0x' + Buffer.from(userUsdcAta.toBytes()).toString('hex');
 
           const suiClient = new SuiClient({ url: getFullnodeUrl('mainnet') });
