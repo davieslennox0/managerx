@@ -14,20 +14,31 @@ export default function App() {
   const [chain] = useState('sui');
   const [showTour, setShowTour] = useState(false);
 
-  // dynamicUser can blip falsy for a moment during in-app reauth flows (e.g. the
-  // step-up popup required before wallet key export) before Dynamic's SDK settles
-  // back into the logged-in state. Without this grace period, that single blip
-  // triggers an instant, hard logout — tearing down the app (and any in-progress
-  // export modal) mid-flow. Only treat the user as actually logged out once
-  // dynamicUser has stayed falsy for a beat.
+  // dynamicUser can go falsy while the user is still mid-flow in a Dynamic
+  // popup (e.g. the step-up verification required before wallet key export).
+  // Rather than guessing at a timeout, only re-check and confirm logout the
+  // next time the user actually interacts with our page — while they're busy
+  // in the popup, no click/tap lands here at all, so we never prematurely
+  // tear the app down mid-flow. If dynamicUser is still gone by the time they
+  // do interact again, it's a real logout.
   const [confirmedLoggedOut, setConfirmedLoggedOut] = useState(false);
+  const dynamicUserRef = React.useRef(dynamicUser);
+  useEffect(() => { dynamicUserRef.current = dynamicUser; }, [dynamicUser]);
+
   useEffect(() => {
     if (dynamicUser) { setConfirmedLoggedOut(false); return; }
-    const timer = setTimeout(() => {
-      setConfirmedLoggedOut(true);
-      setUser(null);
-    }, 1500);
-    return () => clearTimeout(timer);
+    const handleInteraction = () => {
+      if (!dynamicUserRef.current) {
+        setConfirmedLoggedOut(true);
+        setUser(null);
+      }
+    };
+    window.addEventListener('click', handleInteraction);
+    window.addEventListener('touchstart', handleInteraction);
+    return () => {
+      window.removeEventListener('click', handleInteraction);
+      window.removeEventListener('touchstart', handleInteraction);
+    };
   }, [dynamicUser]);
 
   useEffect(() => {
